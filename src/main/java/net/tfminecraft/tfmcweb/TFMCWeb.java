@@ -11,6 +11,7 @@ import net.tfminecraft.tfmcweb.gate.DiscordGateService;
 import net.tfminecraft.tfmcweb.listeners.PlayerJoinListener;
 import net.tfminecraft.tfmcweb.loaders.ConfigLoader;
 import net.tfminecraft.tfmcweb.luckperms.LuckPermsBridge;
+import net.tfminecraft.tfmcweb.entitlements.MetaResync;
 import net.tfminecraft.tfmcweb.entitlements.PlayerMetaSyncService;
 import net.tfminecraft.tfmcweb.managers.BanMirrorPoller;
 import net.tfminecraft.tfmcweb.managers.LinkDiscordCommand;
@@ -33,6 +34,7 @@ public class TFMCWeb extends JavaPlugin {
 	private PatreonRankWriter rankWriter;
 	private LuckPermsBridge luckPermsBridge;
 	private BanMirrorPoller banMirror;
+	private MetaResync metaResync;
 
 	@Override
 	public void onEnable() {
@@ -108,6 +110,8 @@ public class TFMCWeb extends JavaPlugin {
 		);
 		banMirror = new BanMirrorPoller(this, linkCache);
 		banMirror.start();
+		metaResync = new MetaResync(this);
+		metaResync.start();
 
 		getLogger().info(
 			"TFMCWeb enabled (api="
@@ -131,6 +135,9 @@ public class TFMCWeb extends JavaPlugin {
 		}
 		if (banMirror != null) {
 			banMirror.stop();
+		}
+		if (metaResync != null) {
+			metaResync.stop();
 		}
 	}
 

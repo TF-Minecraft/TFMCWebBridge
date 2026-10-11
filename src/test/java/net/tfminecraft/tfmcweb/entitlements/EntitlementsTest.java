@@ -85,6 +85,57 @@ class EntitlementsTest {
             PlayerMetaSyncService.pushAllOnlineAsync();assertEquals(1,async.size());async.removeFirst().run();verify(logger).warning(contains("unavailable"));
         }
     }
+    @Test void changeOnlySyncSkipsRepeatsAndRetriesAfterFailure() {
+        UUID id=UUID.randomUUID();Player player=mock(Player.class);when(player.getUniqueId()).thenReturn(id);Cache.playerMetaSyncPermissions=List.of("tfmc.flag");
+        TFMCWeb plugin=mock(TFMCWeb.class);when(plugin.getLogger()).thenReturn(mock(java.util.logging.Logger.class));TFMCWeb.plugin=plugin;
+        BukkitScheduler scheduler=mock(BukkitScheduler.class);List<Runnable> async=new ArrayList<>();
+        doAnswer(call->{async.add(call.getArgument(1,Runnable.class));return null;}).when(scheduler).runTaskAsynchronously(eq(plugin),any(Runnable.class));
+        try(MockedStatic<Bukkit> b=mockStatic(Bukkit.class);MockedStatic<ProvinceSystemClient> api=mockStatic(ProvinceSystemClient.class)) {
+            b.when(Bukkit::getScheduler).thenReturn(scheduler);
+            api.when(()->ProvinceSystemClient.putRpcPlayerMeta(anyString())).thenReturn(ProvinceSystemClient.SimpleResult.success());
+            PlayerMetaSyncService.pushIfChanged(null);PlayerMetaSyncService.pushIfChanged(player);assertEquals(1,async.size());async.removeFirst().run();
+            PlayerMetaSyncService.pushIfChanged(player);assertTrue(async.isEmpty());
+            PlayerMetaSyncService.pushForPlayer(player);assertEquals(1,async.size());async.removeFirst().run();
+            when(player.hasPermission("tfmc.flag")).thenReturn(true);PlayerMetaSyncService.pushIfChanged(player);assertEquals(1,async.size());
+            api.when(()->ProvinceSystemClient.putRpcPlayerMeta(anyString())).thenReturn(ProvinceSystemClient.SimpleResult.fail("down"));async.removeFirst().run();
+            PlayerMetaSyncService.pushIfChanged(player);assertEquals(1,async.size());
+            api.when(()->ProvinceSystemClient.putRpcPlayerMeta(anyString())).thenThrow(new IllegalStateException("boom"));async.removeFirst().run();
+            verify(plugin.getLogger()).warning(contains("boom"));
+            PlayerMetaSyncService.pushIfChanged(player);assertEquals(1,async.size());
+            api.verify(()->ProvinceSystemClient.putRpcPlayerMeta(contains("\"tfmc.flag\":true")),times(2));
+        }
+    }
+    @Test void aLateTimedOutWriteIsRepairedAndTheWindowEndsOnlyAfterASuccessPastIt() {
+        UUID id=UUID.randomUUID();Player player=mock(Player.class);when(player.getUniqueId()).thenReturn(id);Cache.playerMetaSyncPermissions=List.of("tfmc.flag");
+        TFMCWeb plugin=mock(TFMCWeb.class);when(plugin.getLogger()).thenReturn(mock(java.util.logging.Logger.class));TFMCWeb.plugin=plugin;
+        BukkitScheduler scheduler=mock(BukkitScheduler.class);List<Runnable> async=new ArrayList<>();
+        doAnswer(call->{async.add(call.getArgument(1,Runnable.class));return null;}).when(scheduler).runTaskAsynchronously(eq(plugin),any(Runnable.class));
+        long[] now={1_000L};var original=PlayerMetaSyncService.clock;PlayerMetaSyncService.clock=()->now[0];
+        String[] site={null};String[] lateWrite={null};boolean[] timeOut={true};
+        try(MockedStatic<Bukkit> b=mockStatic(Bukkit.class);MockedStatic<ProvinceSystemClient> api=mockStatic(ProvinceSystemClient.class)) {
+            b.when(Bukkit::getScheduler).thenReturn(scheduler);
+            // Fake site: a timed-out PUT is applied later, when the test says so.
+            api.when(()->ProvinceSystemClient.putRpcPlayerMeta(anyString())).thenAnswer(c->{
+                String body=c.getArgument(0);
+                if(timeOut[0]){timeOut[0]=false;lateWrite[0]=body;return ProvinceSystemClient.SimpleResult.fail("timeout");}
+                site[0]=body;return ProvinceSystemClient.SimpleResult.success();
+            });
+            PlayerMetaSyncService.pushIfChanged(player);async.removeFirst().run();
+            when(player.hasPermission("tfmc.flag")).thenReturn(true);PlayerMetaSyncService.pushIfChanged(player);async.removeFirst().run();
+            String current=site[0];assertTrue(current.contains("\"tfmc.flag\":true"));
+            site[0]=lateWrite[0];
+            now[0]+=180_000L;PlayerMetaSyncService.pushIfChanged(player);async.removeFirst().run();assertEquals(current,site[0]);
+            now[0]=1_000L+PlayerMetaSyncService.REPAIR_WINDOW_MS-1;PlayerMetaSyncService.pushIfChanged(player);async.removeFirst().run();
+            site[0]=lateWrite[0];
+            now[0]=1_000L+PlayerMetaSyncService.REPAIR_WINDOW_MS;PlayerMetaSyncService.pushIfChanged(player);assertEquals(1,async.size());async.removeFirst().run();assertEquals(current,site[0]);
+            PlayerMetaSyncService.pushIfChanged(player);assertTrue(async.isEmpty());
+            // A new failure restarts the window.
+            timeOut[0]=true;PlayerMetaSyncService.pushForPlayer(player);async.removeFirst().run();
+            now[0]+=PlayerMetaSyncService.REPAIR_WINDOW_MS-1;PlayerMetaSyncService.pushIfChanged(player);assertEquals(1,async.size());async.removeFirst().run();
+            PlayerMetaSyncService.pushIfChanged(player);assertEquals(1,async.size());async.removeFirst().run();
+            now[0]+=1;PlayerMetaSyncService.pushIfChanged(player);async.removeFirst().run();PlayerMetaSyncService.pushIfChanged(player);assertTrue(async.isEmpty());
+        } finally {PlayerMetaSyncService.clock=original;}
+    }
     @Test void syncEscapesControlCharactersAndUsesRootLocale() {
         Locale.setDefault(Locale.forLanguageTag("tr-TR"));Cache.realmId="MAIN";
         var meta=new EntitlementResolver.ResolvedMeta(0,false,false,1,1,1,0,List.of("ITEM"),false,Map.of("a\n\u0001",true));
