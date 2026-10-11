@@ -10,10 +10,12 @@ import net.luckperms.api.LuckPerms;
 import net.luckperms.api.LuckPermsProvider;
 import net.luckperms.api.event.EventBus;
 import net.luckperms.api.event.EventSubscription;
+import net.luckperms.api.event.group.GroupDataRecalculateEvent;
 import net.luckperms.api.event.user.UserDataRecalculateEvent;
 import net.luckperms.api.model.user.User;
 import org.bukkit.Bukkit;
 import org.bukkit.entity.Player;
+import org.bukkit.plugin.IllegalPluginAccessException;
 import org.bukkit.plugin.Plugin;
 import org.bukkit.plugin.PluginManager;
 import org.bukkit.plugin.java.JavaPlugin;
@@ -52,7 +54,7 @@ class MetaResyncTest {
 
     @Test void recalculationsPushOnlinePlayersOncePerSecond() throws Exception {
         List<Consumer<UUID>> handlers=new ArrayList<>();AutoCloseable subscription=mock(AutoCloseable.class);
-        var resync=new MetaResync(plugin,(p,onChange)->{assertSame(plugin,p);handlers.add(onChange);return subscription;});
+        var resync=new MetaResync(plugin,(p,onUser,onGroup)->{assertSame(plugin,p);handlers.add(onUser);return subscription;});
         resync.start();resync.start();assertEquals(1,handlers.size());Consumer<UUID> handler=handlers.getFirst();
 
         handler.accept(null);handler.accept(id);handler.accept(id);assertEquals(1,later.size());
@@ -68,27 +70,48 @@ class MetaResyncTest {
     }
 
     @Test void subscribeAndUnsubscribeFailuresAreLogged() throws Exception {
-        new MetaResync(plugin,(p,onChange)->{throw new IllegalStateException("no api");}).start();
+        new MetaResync(plugin,(p,onUser,onGroup)->{throw new IllegalStateException("no api");}).start();
         verify(logger).log(eq(Level.WARNING),contains("next join"),any(IllegalStateException.class));
         AutoCloseable subscription=mock(AutoCloseable.class);doThrow(new Exception("closed")).when(subscription).close();
-        var resync=new MetaResync(plugin,(p,onChange)->subscription);resync.start();resync.stop();resync.stop();
+        var resync=new MetaResync(plugin,(p,onUser,onGroup)->subscription);resync.start();resync.stop();resync.stop();
         verify(logger).log(eq(Level.WARNING),contains("unsubscribe"),any(Exception.class));verify(subscription,times(1)).close();
     }
 
-    @Test @SuppressWarnings("unchecked") void luckPermsListenerForwardsRecalculatedUsers() {
-        LuckPerms api=mock(LuckPerms.class);EventBus events=mock(EventBus.class);EventSubscription<UserDataRecalculateEvent> subscription=mock(EventSubscription.class);
-        when(api.getEventBus()).thenReturn(events);
-        List<Consumer<? super UserDataRecalculateEvent>> handlers=new ArrayList<>();
-        when(events.subscribe(eq(plugin),eq(UserDataRecalculateEvent.class),any())).thenAnswer(c->{handlers.add(c.getArgument(2));return subscription;});
-        List<UUID> changed=new ArrayList<>();
+    @Test @SuppressWarnings("unchecked") void luckPermsListenerForwardsUserAndGroupRecalculations() throws Exception {
+        LuckPerms api=mock(LuckPerms.class);EventBus events=mock(EventBus.class);when(api.getEventBus()).thenReturn(events);
+        EventSubscription<UserDataRecalculateEvent> userSub=mock(EventSubscription.class);EventSubscription<GroupDataRecalculateEvent> groupSub=mock(EventSubscription.class);
+        List<Consumer<? super UserDataRecalculateEvent>> userHandlers=new ArrayList<>();List<Consumer<? super GroupDataRecalculateEvent>> groupHandlers=new ArrayList<>();
+        when(events.subscribe(eq(plugin),eq(UserDataRecalculateEvent.class),any())).thenAnswer(c->{userHandlers.add(c.getArgument(2));return userSub;});
+        when(events.subscribe(eq(plugin),eq(GroupDataRecalculateEvent.class),any())).thenAnswer(c->{groupHandlers.add(c.getArgument(2));return groupSub;});
+        List<UUID> changed=new ArrayList<>();int[] groups={0};
         try(MockedStatic<LuckPermsProvider> provider=mockStatic(LuckPermsProvider.class)){
             provider.when(LuckPermsProvider::get).thenReturn(api);
-            assertSame(subscription,MetaResync.subscribeLuckPerms(plugin,changed::add));
+            AutoCloseable subscription=MetaResync.subscribeLuckPerms(plugin,changed::add,()->groups[0]++);
             User user=mock(User.class);when(user.getUniqueId()).thenReturn(id);UserDataRecalculateEvent event=mock(UserDataRecalculateEvent.class);when(event.getUser()).thenReturn(user);
-            handlers.getFirst().accept(event);assertEquals(List.of(id),changed);
+            userHandlers.getFirst().accept(event);groupHandlers.getFirst().accept(mock(GroupDataRecalculateEvent.class));
+            assertEquals(List.of(id),changed);assertEquals(1,groups[0]);
+            subscription.close();verify(userSub).close();verify(groupSub).close();
             provider.when(LuckPermsProvider::get).thenThrow(new IllegalStateException("not loaded"));
-            assertThrows(IllegalStateException.class,()->MetaResync.subscribeLuckPerms(plugin,changed::add));
+            assertThrows(IllegalStateException.class,()->MetaResync.subscribeLuckPerms(plugin,changed::add,()->{}));
         }
+    }
+
+    @Test void groupRecalculationsCheckEveryOnlinePlayerOncePerSecond() {
+        List<Runnable> groupHandlers=new ArrayList<>();
+        var resync=new MetaResync(plugin,(p,onUser,onGroup)->{groupHandlers.add(onGroup);return mock(AutoCloseable.class);});resync.start();
+        Player other=mock(Player.class);bukkit.when(Bukkit::getOnlinePlayers).thenReturn(List.of(player,other));
+        groupHandlers.getFirst().run();groupHandlers.getFirst().run();assertEquals(1,later.size());later.removeFirst().run();
+        sync.verify(()->PlayerMetaSyncService.pushIfChanged(player));sync.verify(()->PlayerMetaSyncService.pushIfChanged(other));
+        groupHandlers.getFirst().run();assertEquals(1,later.size());later.clear();
+        resync.stop();when(plugin.isEnabled()).thenReturn(false);groupHandlers.getFirst().run();assertTrue(later.isEmpty());
+    }
+
+    @Test void schedulingRejectedDuringShutdownLeavesNothingPending() {
+        var resync=new MetaResync(plugin,(p,onUser,onGroup)->mock(AutoCloseable.class));
+        doThrow(new IllegalPluginAccessException("disabled")).when(scheduler).runTaskLater(eq(plugin),any(Runnable.class),eq(MetaResync.DELAY_TICKS));
+        resync.request(id);resync.requestAll();
+        doAnswer(c->{later.add(c.getArgument(1,Runnable.class));return null;}).when(scheduler).runTaskLater(eq(plugin),any(Runnable.class),eq(MetaResync.DELAY_TICKS));
+        resync.request(id);resync.requestAll();assertEquals(2,later.size());
     }
 
     @Test void defaultConstructorUsesLuckPermsSubscriber() {

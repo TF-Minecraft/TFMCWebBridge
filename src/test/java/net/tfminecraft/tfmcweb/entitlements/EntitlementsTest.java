@@ -99,7 +99,35 @@ class EntitlementsTest {
             when(player.hasPermission("tfmc.flag")).thenReturn(true);PlayerMetaSyncService.pushIfChanged(player);assertEquals(1,async.size());
             api.when(()->ProvinceSystemClient.putRpcPlayerMeta(anyString())).thenReturn(ProvinceSystemClient.SimpleResult.fail("down"));async.removeFirst().run();
             PlayerMetaSyncService.pushIfChanged(player);assertEquals(1,async.size());
-            api.verify(()->ProvinceSystemClient.putRpcPlayerMeta(contains("\"tfmc.flag\":true")),times(1));
+            api.when(()->ProvinceSystemClient.putRpcPlayerMeta(anyString())).thenThrow(new IllegalStateException("boom"));async.removeFirst().run();
+            verify(plugin.getLogger()).warning(contains("boom"));
+            PlayerMetaSyncService.pushIfChanged(player);assertEquals(1,async.size());
+            api.verify(()->ProvinceSystemClient.putRpcPlayerMeta(contains("\"tfmc.flag\":true")),times(2));
+        }
+    }
+    @Test void sendsForOnePlayerStayInOrderAndOnlyTheNewestQueuedBodyIsSent() {
+        UUID id=UUID.randomUUID();Player player=mock(Player.class);when(player.getUniqueId()).thenReturn(id);Cache.playerMetaSyncPermissions=List.of("tfmc.flag");
+        TFMCWeb plugin=mock(TFMCWeb.class);when(plugin.getLogger()).thenReturn(mock(java.util.logging.Logger.class));TFMCWeb.plugin=plugin;
+        BukkitScheduler scheduler=mock(BukkitScheduler.class);List<Runnable> async=new ArrayList<>();
+        doAnswer(call->{async.add(call.getArgument(1,Runnable.class));return null;}).when(scheduler).runTaskAsynchronously(eq(plugin),any(Runnable.class));
+        List<String> sent=new ArrayList<>();
+        try(MockedStatic<Bukkit> b=mockStatic(Bukkit.class);MockedStatic<ProvinceSystemClient> api=mockStatic(ProvinceSystemClient.class)) {
+            b.when(Bukkit::getScheduler).thenReturn(scheduler);
+            api.when(()->ProvinceSystemClient.putRpcPlayerMeta(anyString())).thenAnswer(c->{sent.add(c.getArgument(0));return ProvinceSystemClient.SimpleResult.success();});
+            PlayerMetaSyncService.pushForPlayer(player);when(player.hasPermission("tfmc.flag")).thenReturn(true);PlayerMetaSyncService.pushIfChanged(player);
+            assertEquals(1,async.size());async.removeFirst().run();
+            assertEquals(1,sent.size());assertTrue(sent.getFirst().contains("\"tfmc.flag\":true"));
+            boolean[] flipped={false};
+            api.when(()->ProvinceSystemClient.putRpcPlayerMeta(anyString())).thenAnswer(c->{
+                sent.add(c.getArgument(0));
+                if(!flipped[0]){flipped[0]=true;when(player.hasPermission("tfmc.flag")).thenReturn(true);PlayerMetaSyncService.pushIfChanged(player);}
+                return ProvinceSystemClient.SimpleResult.success();
+            });
+            sent.clear();flipped[0]=false;
+            // Site holds true; a false send is in flight when the flag flips back, so true must follow it.
+            when(player.hasPermission("tfmc.flag")).thenReturn(false);PlayerMetaSyncService.pushIfChanged(player);assertEquals(1,async.size());async.removeFirst().run();
+            assertTrue(async.isEmpty());assertEquals(2,sent.size());assertTrue(sent.get(0).contains("\"tfmc.flag\":false"));assertTrue(sent.get(1).contains("\"tfmc.flag\":true"));
+            PlayerMetaSyncService.pushIfChanged(player);assertTrue(async.isEmpty());
         }
     }
     @Test void syncEscapesControlCharactersAndUsesRootLocale() {

@@ -1,6 +1,7 @@
 package net.tfminecraft.tfmcweb.entitlements;
 
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -17,8 +18,15 @@ import net.tfminecraft.tfmcweb.entitlements.EntitlementResolver.ResolvedMeta;
  */
 public final class PlayerMetaSyncService {
 
-	/** Last body sent per player; a failed push drops its entry so the next one retries. */
-	private static final Map<UUID, String> lastSent = new ConcurrentHashMap<>();
+	/**
+	 * Newest body handed to the sender per player. Sends run in order, so this is what the
+	 * website ends up with; a failed PUT drops it so the next push retries.
+	 */
+	private static final Map<UUID, String> latest = new ConcurrentHashMap<>();
+	/** Newest body waiting to be sent per player. */
+	private static final Map<UUID, String> queued = new ConcurrentHashMap<>();
+	/** Players with a send task running; one per player keeps PUTs in order. */
+	private static final Set<UUID> sending = ConcurrentHashMap.newKeySet();
 
 	private PlayerMetaSyncService() {}
 
@@ -27,7 +35,7 @@ public final class PlayerMetaSyncService {
 		push(player, true);
 	}
 
-	/** Like {@link #pushForPlayer} but skips the PUT when nothing changed since the last push. */
+	/** Like {@link #pushForPlayer} but skips the PUT when this body was already sent or is on its way. */
 	public static void pushIfChanged(Player player) {
 		push(player, false);
 	}
@@ -39,22 +47,44 @@ public final class PlayerMetaSyncService {
 		UUID playerUuid = player.getUniqueId();
 		ResolvedMeta meta = EntitlementResolver.resolve(player);
 		String body = toJson(playerUuid, meta);
-		String previous = lastSent.put(playerUuid, body);
-		if (!force && body.equals(previous)) {
+		if (!force && body.equals(latest.get(playerUuid))) {
 			return;
 		}
-		Bukkit.getScheduler().runTaskAsynchronously(
-			TFMCWeb.plugin,
-			() -> {
-				SimpleResult result = ProvinceSystemClient.putRpcPlayerMeta(body);
-				if (!result.ok) {
-					lastSent.remove(playerUuid, body);
-					TFMCWeb.plugin.getLogger().warning(
-						"[player-meta] push failed for " + playerUuid + ": " + result.error
-					);
-				}
+		latest.put(playerUuid, body);
+		queued.put(playerUuid, body);
+		if (sending.add(playerUuid)) {
+			Bukkit.getScheduler().runTaskAsynchronously(TFMCWeb.plugin, () -> drain(playerUuid));
+		}
+	}
+
+	/**
+	 * Sends the newest queued body until none is left, so an older body never lands last.
+	 * The outer check catches a body queued after the inner loop emptied but before release.
+	 */
+	static void drain(UUID playerUuid) {
+		do {
+			String body;
+			while ((body = queued.remove(playerUuid)) != null) {
+				send(playerUuid, body);
 			}
-		);
+			sending.remove(playerUuid);
+		} while (queued.containsKey(playerUuid) && sending.add(playerUuid));
+	}
+
+	private static void send(UUID playerUuid, String body) {
+		SimpleResult result;
+		try {
+			result = ProvinceSystemClient.putRpcPlayerMeta(body);
+		} catch (RuntimeException e) {
+			// A stuck sending entry would stop this player's pushes until restart.
+			result = SimpleResult.fail(String.valueOf(e));
+		}
+		if (!result.ok) {
+			latest.remove(playerUuid, body);
+			TFMCWeb.plugin.getLogger().warning(
+				"[player-meta] push failed for " + playerUuid + ": " + result.error
+			);
+		}
 	}
 
 	public static void pushAsync(UUID playerUuid) {

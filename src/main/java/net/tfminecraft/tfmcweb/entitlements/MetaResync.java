@@ -3,19 +3,21 @@ package net.tfminecraft.tfmcweb.entitlements;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
 import java.util.logging.Level;
 
 import org.bukkit.Bukkit;
 import org.bukkit.entity.Player;
+import org.bukkit.plugin.IllegalPluginAccessException;
 import org.bukkit.plugin.Plugin;
 import org.bukkit.plugin.java.JavaPlugin;
 
 /**
- * Pushes a player's web entitlements again after LuckPerms recalculates their permissions,
- * so rank changes made while they are online reach the website without a rejoin.
+ * Pushes web entitlements again after LuckPerms recalculates a player's or a group's
+ * permissions, so rank changes made while players are online reach the website without a rejoin.
  * Recalculations within one second share one check, and unchanged entitlements are not resent:
- * LuckPerms recalculates every online player on each periodic storage sync.
+ * LuckPerms recalculates every online player and group on each periodic storage sync.
  */
 public final class MetaResync {
 
@@ -23,12 +25,13 @@ public final class MetaResync {
 
 	@FunctionalInterface
 	public interface Subscriber {
-		AutoCloseable subscribe(Plugin plugin, Consumer<UUID> onChange);
+		AutoCloseable subscribe(Plugin plugin, Consumer<UUID> onUser, Runnable onGroup);
 	}
 
 	private final JavaPlugin plugin;
 	private final Subscriber subscriber;
 	private final Set<UUID> pending = ConcurrentHashMap.newKeySet();
+	private final AtomicBoolean allPending = new AtomicBoolean();
 	private AutoCloseable subscription;
 
 	public MetaResync(JavaPlugin plugin) {
@@ -41,11 +44,11 @@ public final class MetaResync {
 	}
 
 	/** Loads the LuckPerms listener by name so this class does not reference the API. */
-	static AutoCloseable subscribeLuckPerms(Plugin plugin, Consumer<UUID> onChange) {
+	static AutoCloseable subscribeLuckPerms(Plugin plugin, Consumer<UUID> onUser, Runnable onGroup) {
 		try {
 			Class<?> type = Class.forName("net.tfminecraft.tfmcweb.luckperms.LuckPermsRecalculateListener");
-			return (AutoCloseable) type.getMethod("subscribe", Plugin.class, Consumer.class)
-				.invoke(null, plugin, onChange);
+			return (AutoCloseable) type.getMethod("subscribe", Plugin.class, Consumer.class, Runnable.class)
+				.invoke(null, plugin, onUser, onGroup);
 		} catch (ReflectiveOperationException | NoClassDefFoundError e) {
 			throw new IllegalStateException("LuckPerms API is not available", e);
 		}
@@ -56,7 +59,7 @@ public final class MetaResync {
 			return;
 		}
 		try {
-			subscription = subscriber.subscribe(plugin, this::request);
+			subscription = subscriber.subscribe(plugin, this::request, this::requestAll);
 		} catch (RuntimeException e) {
 			plugin.getLogger().log(
 				Level.WARNING,
@@ -68,6 +71,7 @@ public final class MetaResync {
 
 	public void stop() {
 		pending.clear();
+		allPending.set(false);
 		if (subscription == null) {
 			return;
 		}
@@ -79,18 +83,45 @@ public final class MetaResync {
 		subscription = null;
 	}
 
-	/** Safe from any thread; LuckPerms may fire recalculations asynchronously. */
+	/** Safe from any thread; LuckPerms fires recalculations asynchronously. */
 	void request(UUID playerUuid) {
 		if (playerUuid == null || !plugin.isEnabled() || !pending.add(playerUuid)) {
 			return;
 		}
-		Bukkit.getScheduler().runTaskLater(plugin, () -> {
+		if (!schedule(() -> {
 			pending.remove(playerUuid);
 			Player online = Bukkit.getPlayer(playerUuid);
 			if (online != null && online.isOnline()) {
 				PlayerMetaSyncService.pushIfChanged(online);
 			}
-		}, DELAY_TICKS);
+		})) {
+			pending.remove(playerUuid);
+		}
+	}
+
+	/** Checks every online player; a group change can reach any member. */
+	void requestAll() {
+		if (!plugin.isEnabled() || !allPending.compareAndSet(false, true)) {
+			return;
+		}
+		if (!schedule(() -> {
+			allPending.set(false);
+			for (Player online : Bukkit.getOnlinePlayers()) {
+				PlayerMetaSyncService.pushIfChanged(online);
+			}
+		})) {
+			allPending.set(false);
+		}
+	}
+
+	/** False when the plugin was disabled between the check and scheduling. */
+	private boolean schedule(Runnable task) {
+		try {
+			Bukkit.getScheduler().runTaskLater(plugin, task, DELAY_TICKS);
+			return true;
+		} catch (IllegalPluginAccessException e) {
+			return false;
+		}
 	}
 
 	private static boolean luckPermsPresent() {
