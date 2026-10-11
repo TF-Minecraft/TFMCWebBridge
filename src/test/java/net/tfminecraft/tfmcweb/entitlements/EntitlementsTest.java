@@ -41,7 +41,7 @@ class EntitlementsTest {
         Cache.rpcMetaGroups=List.of();Cache.skinsMetaGroups=List.of();Cache.drinksMetaGroups=List.of();
         Cache.skinsMetaDefaultKinds=Arrays.asList(null," "," ITEM ");
         var defaults=EntitlementResolver.resolve(null);
-        assertEquals(1,defaults.maxAliveCharacters);assertEquals(1,defaults.wardrobeSkinSlots);assertEquals(30720,defaults.max3dPairBytes);assertEquals(-1,defaults.skinTokenCooldownDays);assertEquals(List.of("item"),defaults.skinKinds);assertEquals(0,defaults.donatorTier);
+        assertEquals(1,defaults.maxAliveCharacters);assertEquals(1,defaults.wardrobeSkinSlots);assertEquals(30720,defaults.max3dPairBytes);assertEquals(-1,defaults.skinTokenCooldownDays);assertEquals(List.of("item"),defaults.skinKinds);
         Player player=mock(Player.class); when(player.hasPermission("rank.high")).thenReturn(true);when(player.hasPermission("allowed")).thenReturn(true);
         var low=group("rank.low",1,Map.of("name-colour-stops",2,"skin-token-cooldown-days",5),List.of("book"),true,false,false);
         var high=group("rank.high",3,Map.of("name-colour-stops",4,"max-alive-characters",8,"wardrobe-skin-slots",8,"max-3d-pair-bytes",60000),List.of("armor"),null,true,true);
@@ -54,18 +54,17 @@ class EntitlementsTest {
         var meta=EntitlementResolver.resolve(player);
         assertEquals(4,meta.nameColourStops);assertEquals(8,meta.maxAliveCharacters);assertEquals(3,meta.wardrobeSkinSlots);assertEquals(60000,meta.max3dPairBytes);
         assertEquals(5,meta.skinTokenCooldownDays);assertEquals(List.of("item","book","armor"),meta.skinKinds);assertTrue(meta.allowArmor3dHelmet && meta.allowDrinkTexture && meta.allowDrinkMessage);
-        assertEquals(Map.of("allowed",true,"denied",false),meta.permissionFlags);assertEquals(3,meta.donatorTier);
+        assertEquals(Map.of("allowed",true,"denied",false),meta.permissionFlags);
         Cache.skinsMetaGroups=List.of(high); assertEquals(-1,EntitlementResolver.resolve(player).skinTokenCooldownDays); assertFalse(EntitlementResolver.resolve(player).allowArmor3dHelmet);
         Cache.drinksMetaGroups=List.of(low);when(player.hasPermission("rank.low")).thenReturn(true);assertFalse(EntitlementResolver.resolve(player).allowDrinkTexture);assertFalse(EntitlementResolver.resolve(player).allowDrinkMessage);
-        when(player.hasPermission("rank.low")).thenReturn(false);Cache.rpcMetaGroups=List.of(low);assertEquals(0,EntitlementResolver.highestRpcTier(player));
     }
     @Test void syncJsonCopiesValuesAndSkipsBlankKeys() {
         UUID id=UUID.randomUUID(); Cache.realmId="dev";
-        var meta=new EntitlementResolver.ResolvedMeta(3,true,false,8,2,40000,5,List.of(" BOOK "," ","item"),true,Map.of("p\"\\",true,"q",false," ",true),-2);
+        var meta=new EntitlementResolver.ResolvedMeta(3,true,false,8,2,40000,5,List.of(" BOOK "," ","item"),true,Map.of("p\"\\",true,"q",false," ",true));
         var json=JsonParser.parseString(PlayerMetaSyncService.toJson(id,meta)).getAsJsonObject();
         assertEquals(id.toString(),json.get("player_uuid").getAsString());assertEquals("dev",json.get("realm_id").getAsString());assertEquals(8,json.get("max_alive_characters").getAsInt());
-        assertEquals(0,json.get("donator_tier").getAsInt());assertEquals(2,json.getAsJsonArray("skin_kinds").size());assertEquals(2,json.getAsJsonObject("permission_flags").size());
-        var minimal=new EntitlementResolver.ResolvedMeta(0,false,false,null,1,1,0,List.of(),false,Map.of(),0);
+        assertEquals(2,json.getAsJsonArray("skin_kinds").size());assertEquals(2,json.getAsJsonObject("permission_flags").size());
+        var minimal=new EntitlementResolver.ResolvedMeta(0,false,false,null,1,1,0,List.of(),false,Map.of());
         assertFalse(JsonParser.parseString(PlayerMetaSyncService.toJson(id,minimal)).getAsJsonObject().has("max_alive_characters"));
     }
     @Test void syncCapturesPermissionsBeforeSchedulingAndHandlesOfflineAndFailures() {
@@ -88,7 +87,7 @@ class EntitlementsTest {
     }
     @Test void syncEscapesControlCharactersAndUsesRootLocale() {
         Locale.setDefault(Locale.forLanguageTag("tr-TR"));Cache.realmId="MAIN";
-        var meta=new EntitlementResolver.ResolvedMeta(0,false,false,1,1,1,0,List.of("ITEM"),false,Map.of("a\n\u0001",true),0);
+        var meta=new EntitlementResolver.ResolvedMeta(0,false,false,1,1,1,0,List.of("ITEM"),false,Map.of("a\n\u0001",true));
         String payload=PlayerMetaSyncService.toJson(UUID.randomUUID(),meta);
         assertFalse(payload.contains("\n"));assertFalse(payload.contains("\u0001"));
         var json=JsonParser.parseString(payload).getAsJsonObject();assertEquals("item",json.getAsJsonArray("skin_kinds").get(0).getAsString());

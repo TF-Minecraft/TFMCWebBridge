@@ -91,7 +91,6 @@ public final class PlayerMetaSyncService {
 		}
 		sb.append(']');
 		sb.append(",\"allow_armor_3d_helmet\":").append(meta.allowArmor3dHelmet);
-		sb.append(",\"donator_tier\":").append(meta.donatorTier);
 		sb.append(",\"permission_flags\":{");
 		first = true;
 		for (Map.Entry<String, Boolean> entry : meta.permissionFlags.entrySet()) {
