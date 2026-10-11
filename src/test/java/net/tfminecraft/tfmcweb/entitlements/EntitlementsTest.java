@@ -105,6 +105,24 @@ class EntitlementsTest {
             api.verify(()->ProvinceSystemClient.putRpcPlayerMeta(contains("\"tfmc.flag\":true")),times(2));
         }
     }
+    @Test void unchangedBodiesAreResentUntilTheRepairWindowAfterAFailurePasses() {
+        UUID id=UUID.randomUUID();Player player=mock(Player.class);when(player.getUniqueId()).thenReturn(id);
+        TFMCWeb plugin=mock(TFMCWeb.class);when(plugin.getLogger()).thenReturn(mock(java.util.logging.Logger.class));TFMCWeb.plugin=plugin;
+        BukkitScheduler scheduler=mock(BukkitScheduler.class);List<Runnable> async=new ArrayList<>();
+        doAnswer(call->{async.add(call.getArgument(1,Runnable.class));return null;}).when(scheduler).runTaskAsynchronously(eq(plugin),any(Runnable.class));
+        long[] now={1_000L};var original=PlayerMetaSyncService.clock;PlayerMetaSyncService.clock=()->now[0];
+        try(MockedStatic<Bukkit> b=mockStatic(Bukkit.class);MockedStatic<ProvinceSystemClient> api=mockStatic(ProvinceSystemClient.class)) {
+            b.when(Bukkit::getScheduler).thenReturn(scheduler);
+            // A timed-out PUT may still land after the newer one, so success alone does not end the window.
+            api.when(()->ProvinceSystemClient.putRpcPlayerMeta(anyString())).thenReturn(ProvinceSystemClient.SimpleResult.fail("timeout"));
+            PlayerMetaSyncService.pushIfChanged(player);async.removeFirst().run();
+            api.when(()->ProvinceSystemClient.putRpcPlayerMeta(anyString())).thenReturn(ProvinceSystemClient.SimpleResult.success());
+            now[0]+=180_000L;PlayerMetaSyncService.pushIfChanged(player);assertEquals(1,async.size());async.removeFirst().run();
+            now[0]+=180_000L;PlayerMetaSyncService.pushIfChanged(player);assertEquals(1,async.size());async.removeFirst().run();
+            now[0]=1_000L+PlayerMetaSyncService.REPAIR_WINDOW_MS;PlayerMetaSyncService.pushIfChanged(player);assertTrue(async.isEmpty());
+            PlayerMetaSyncService.pushIfChanged(player);assertTrue(async.isEmpty());
+        } finally {PlayerMetaSyncService.clock=original;}
+    }
     @Test void sendsForOnePlayerStayInOrderAndOnlyTheNewestQueuedBodyIsSent() {
         UUID id=UUID.randomUUID();Player player=mock(Player.class);when(player.getUniqueId()).thenReturn(id);Cache.playerMetaSyncPermissions=List.of("tfmc.flag");
         TFMCWeb plugin=mock(TFMCWeb.class);when(plugin.getLogger()).thenReturn(mock(java.util.logging.Logger.class));TFMCWeb.plugin=plugin;

@@ -4,6 +4,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.LongSupplier;
 
 import org.bukkit.Bukkit;
 import org.bukkit.entity.Player;
@@ -19,10 +20,17 @@ import net.tfminecraft.tfmcweb.entitlements.EntitlementResolver.ResolvedMeta;
 public final class PlayerMetaSyncService {
 
 	/**
-	 * Newest body handed to the sender per player. Sends run in order, so this is what the
-	 * website ends up with; a failed PUT drops it so the next push retries.
+	 * After a failed PUT, unchanged bodies are resent for this long. A timed-out PUT can still
+	 * land on the website after a newer one, so the newest body cannot be trusted until a send
+	 * succeeds well after the failure; periodic LuckPerms syncs supply those resends.
 	 */
+	static final long REPAIR_WINDOW_MS = 10 * 60_000L;
+	static LongSupplier clock = System::currentTimeMillis;
+
+	/** Newest body handed to the sender per player. Sends run in order. */
 	private static final Map<UUID, String> latest = new ConcurrentHashMap<>();
+	/** Time of each player's last failed PUT, cleared once the repair window has passed. */
+	private static final Map<UUID, Long> failedAt = new ConcurrentHashMap<>();
 	/** Newest body waiting to be sent per player. */
 	private static final Map<UUID, String> queued = new ConcurrentHashMap<>();
 	/** Players with a send task running; one per player keeps PUTs in order. */
@@ -30,7 +38,7 @@ public final class PlayerMetaSyncService {
 
 	private PlayerMetaSyncService() {}
 
-	/** Resolve on the calling thread (prefer main), then PUT async. */
+	/** Resolve on the main thread, then PUT async. Producers must stay on the main thread. */
 	public static void pushForPlayer(Player player) {
 		push(player, true);
 	}
@@ -47,7 +55,7 @@ public final class PlayerMetaSyncService {
 		UUID playerUuid = player.getUniqueId();
 		ResolvedMeta meta = EntitlementResolver.resolve(player);
 		String body = toJson(playerUuid, meta);
-		if (!force && body.equals(latest.get(playerUuid))) {
+		if (!force && body.equals(latest.get(playerUuid)) && !recentlyFailed(playerUuid)) {
 			return;
 		}
 		latest.put(playerUuid, body);
@@ -80,11 +88,23 @@ public final class PlayerMetaSyncService {
 			result = SimpleResult.fail(String.valueOf(e));
 		}
 		if (!result.ok) {
-			latest.remove(playerUuid, body);
+			failedAt.put(playerUuid, clock.getAsLong());
 			TFMCWeb.plugin.getLogger().warning(
 				"[player-meta] push failed for " + playerUuid + ": " + result.error
 			);
 		}
+	}
+
+	private static boolean recentlyFailed(UUID playerUuid) {
+		Long failed = failedAt.get(playerUuid);
+		if (failed == null) {
+			return false;
+		}
+		if (clock.getAsLong() - failed < REPAIR_WINDOW_MS) {
+			return true;
+		}
+		failedAt.remove(playerUuid, failed);
+		return false;
 	}
 
 	public static void pushAsync(UUID playerUuid) {
