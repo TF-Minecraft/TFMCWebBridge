@@ -85,6 +85,23 @@ class EntitlementsTest {
             PlayerMetaSyncService.pushAllOnlineAsync();assertEquals(1,async.size());async.removeFirst().run();verify(logger).warning(contains("unavailable"));
         }
     }
+    @Test void changeOnlySyncSkipsRepeatsAndRetriesAfterFailure() {
+        UUID id=UUID.randomUUID();Player player=mock(Player.class);when(player.getUniqueId()).thenReturn(id);Cache.playerMetaSyncPermissions=List.of("tfmc.flag");
+        TFMCWeb plugin=mock(TFMCWeb.class);when(plugin.getLogger()).thenReturn(mock(java.util.logging.Logger.class));TFMCWeb.plugin=plugin;
+        BukkitScheduler scheduler=mock(BukkitScheduler.class);List<Runnable> async=new ArrayList<>();
+        doAnswer(call->{async.add(call.getArgument(1,Runnable.class));return null;}).when(scheduler).runTaskAsynchronously(eq(plugin),any(Runnable.class));
+        try(MockedStatic<Bukkit> b=mockStatic(Bukkit.class);MockedStatic<ProvinceSystemClient> api=mockStatic(ProvinceSystemClient.class)) {
+            b.when(Bukkit::getScheduler).thenReturn(scheduler);
+            api.when(()->ProvinceSystemClient.putRpcPlayerMeta(anyString())).thenReturn(ProvinceSystemClient.SimpleResult.success());
+            PlayerMetaSyncService.pushIfChanged(null);PlayerMetaSyncService.pushIfChanged(player);assertEquals(1,async.size());async.removeFirst().run();
+            PlayerMetaSyncService.pushIfChanged(player);assertTrue(async.isEmpty());
+            PlayerMetaSyncService.pushForPlayer(player);assertEquals(1,async.size());async.removeFirst().run();
+            when(player.hasPermission("tfmc.flag")).thenReturn(true);PlayerMetaSyncService.pushIfChanged(player);assertEquals(1,async.size());
+            api.when(()->ProvinceSystemClient.putRpcPlayerMeta(anyString())).thenReturn(ProvinceSystemClient.SimpleResult.fail("down"));async.removeFirst().run();
+            PlayerMetaSyncService.pushIfChanged(player);assertEquals(1,async.size());
+            api.verify(()->ProvinceSystemClient.putRpcPlayerMeta(contains("\"tfmc.flag\":true")),times(1));
+        }
+    }
     @Test void syncEscapesControlCharactersAndUsesRootLocale() {
         Locale.setDefault(Locale.forLanguageTag("tr-TR"));Cache.realmId="MAIN";
         var meta=new EntitlementResolver.ResolvedMeta(0,false,false,1,1,1,0,List.of("ITEM"),false,Map.of("a\n\u0001",true));

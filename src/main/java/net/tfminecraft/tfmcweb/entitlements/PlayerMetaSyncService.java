@@ -2,6 +2,7 @@ package net.tfminecraft.tfmcweb.entitlements;
 
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 
 import org.bukkit.Bukkit;
 import org.bukkit.entity.Player;
@@ -12,25 +13,42 @@ import net.tfminecraft.tfmcweb.api.ProvinceSystemClient.SimpleResult;
 import net.tfminecraft.tfmcweb.entitlements.EntitlementResolver.ResolvedMeta;
 
 /**
- * Push resolved web entitlements to ProvinceSystem on join / reload (fail-soft).
+ * Push resolved web entitlements to ProvinceSystem on join, reload and rank change (fail-soft).
  */
 public final class PlayerMetaSyncService {
+
+	/** Last body sent per player; a failed push drops its entry so the next one retries. */
+	private static final Map<UUID, String> lastSent = new ConcurrentHashMap<>();
 
 	private PlayerMetaSyncService() {}
 
 	/** Resolve on the calling thread (prefer main), then PUT async. */
 	public static void pushForPlayer(Player player) {
+		push(player, true);
+	}
+
+	/** Like {@link #pushForPlayer} but skips the PUT when nothing changed since the last push. */
+	public static void pushIfChanged(Player player) {
+		push(player, false);
+	}
+
+	private static void push(Player player, boolean force) {
 		if (player == null || TFMCWeb.plugin == null) {
 			return;
 		}
 		UUID playerUuid = player.getUniqueId();
 		ResolvedMeta meta = EntitlementResolver.resolve(player);
 		String body = toJson(playerUuid, meta);
+		String previous = lastSent.put(playerUuid, body);
+		if (!force && body.equals(previous)) {
+			return;
+		}
 		Bukkit.getScheduler().runTaskAsynchronously(
 			TFMCWeb.plugin,
 			() -> {
 				SimpleResult result = ProvinceSystemClient.putRpcPlayerMeta(body);
 				if (!result.ok) {
+					lastSent.remove(playerUuid, body);
 					TFMCWeb.plugin.getLogger().warning(
 						"[player-meta] push failed for " + playerUuid + ": " + result.error
 					);
