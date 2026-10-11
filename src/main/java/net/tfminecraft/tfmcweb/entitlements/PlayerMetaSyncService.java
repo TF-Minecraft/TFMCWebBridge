@@ -20,16 +20,16 @@ import net.tfminecraft.tfmcweb.entitlements.EntitlementResolver.ResolvedMeta;
 public final class PlayerMetaSyncService {
 
 	/**
-	 * After a failed PUT, unchanged bodies are resent for this long. A timed-out PUT can still
-	 * land on the website after a newer one, so the newest body cannot be trusted until a send
-	 * succeeds well after the failure; periodic LuckPerms syncs supply those resends.
+	 * After a failed PUT, unchanged bodies keep being resent until one succeeds at least this long
+	 * after the last failure. A timed-out PUT can still be applied by the website after a newer
+	 * one; resends on later recalculations (the periodic LuckPerms sync) repair that, best effort.
 	 */
 	static final long REPAIR_WINDOW_MS = 10 * 60_000L;
 	static LongSupplier clock = System::currentTimeMillis;
 
-	/** Newest body handed to the sender per player. Sends run in order. */
+	/** Newest body handed to the sender per player. Sends are attempted one at a time, in order. */
 	private static final Map<UUID, String> latest = new ConcurrentHashMap<>();
-	/** Time of each player's last failed PUT, cleared once the repair window has passed. */
+	/** Time of each player's last failed PUT, cleared by a successful send after the window. */
 	private static final Map<UUID, Long> failedAt = new ConcurrentHashMap<>();
 	/** Newest body waiting to be sent per player. */
 	private static final Map<UUID, String> queued = new ConcurrentHashMap<>();
@@ -55,7 +55,7 @@ public final class PlayerMetaSyncService {
 		UUID playerUuid = player.getUniqueId();
 		ResolvedMeta meta = EntitlementResolver.resolve(player);
 		String body = toJson(playerUuid, meta);
-		if (!force && body.equals(latest.get(playerUuid)) && !recentlyFailed(playerUuid)) {
+		if (!force && body.equals(latest.get(playerUuid)) && !failedAt.containsKey(playerUuid)) {
 			return;
 		}
 		latest.put(playerUuid, body);
@@ -66,7 +66,7 @@ public final class PlayerMetaSyncService {
 	}
 
 	/**
-	 * Sends the newest queued body until none is left, so an older body never lands last.
+	 * Sends the newest queued body until none is left, one attempt at a time.
 	 * The outer check catches a body queued after the inner loop emptied but before release.
 	 */
 	static void drain(UUID playerUuid) {
@@ -87,24 +87,17 @@ public final class PlayerMetaSyncService {
 			// A stuck sending entry would stop this player's pushes until restart.
 			result = SimpleResult.fail(String.valueOf(e));
 		}
-		if (!result.ok) {
-			failedAt.put(playerUuid, clock.getAsLong());
-			TFMCWeb.plugin.getLogger().warning(
-				"[player-meta] push failed for " + playerUuid + ": " + result.error
-			);
+		if (result.ok) {
+			Long failed = failedAt.get(playerUuid);
+			if (failed != null && clock.getAsLong() - failed >= REPAIR_WINDOW_MS) {
+				failedAt.remove(playerUuid, failed);
+			}
+			return;
 		}
-	}
-
-	private static boolean recentlyFailed(UUID playerUuid) {
-		Long failed = failedAt.get(playerUuid);
-		if (failed == null) {
-			return false;
-		}
-		if (clock.getAsLong() - failed < REPAIR_WINDOW_MS) {
-			return true;
-		}
-		failedAt.remove(playerUuid, failed);
-		return false;
+		failedAt.put(playerUuid, clock.getAsLong());
+		TFMCWeb.plugin.getLogger().warning(
+			"[player-meta] push failed for " + playerUuid + ": " + result.error
+		);
 	}
 
 	public static void pushAsync(UUID playerUuid) {
