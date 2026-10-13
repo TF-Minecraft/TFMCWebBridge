@@ -52,7 +52,7 @@ class ProvinceSystemGatewayTest {
     @Test void injectsQueryOnlyOnAllowlistedGetsAndPreservesExplicitRealm() {
         assertNull(ProvinceSystemGateway.injectRealmPath("GET", null));
         assertEquals(" ", ProvinceSystemGateway.injectRealmPath("GET", " "));
-        for (String path : List.of("/characters/plugin/pending", "/skins/plugin/approved", "/drinks/plugin/pending-apply", "/characters/plugin/lore-items/pending")) {
+        for (String path : List.of("/characters/plugin/pending", "/skins/plugin/approved", "/drinks/plugin/pending-apply", "/characters/plugin/lore-items/pending", "/characters/plugin/wills/pending")) {
             assertEquals(path+"?realm_id=dev", ProvinceSystemGateway.injectRealmPath("GET", path));
             assertEquals(path+"/?realm_id=dev", ProvinceSystemGateway.injectRealmPath("GET", path+"/"));
             assertEquals(path+"?a=1&realm_id=dev", ProvinceSystemGateway.injectRealmPath("GET", path+"?a=1"));
@@ -67,7 +67,7 @@ class ProvinceSystemGatewayTest {
     }
     @Test void injectsBodiesOnlyOnAllowlistedWrites() {
         for (String method : List.of("PUT", "POST")) {
-            List<String> paths = method.equals("PUT") ? List.of("/characters/plugin/roster", "/characters/plugin/rpc-player-meta") : List.of("/wars/declare-codes/validate", "/wars/declare-codes/redeem");
+            List<String> paths = method.equals("PUT") ? List.of("/characters/plugin/roster", "/characters/plugin/rpc-player-meta") : List.of("/wars/declare-codes/validate", "/wars/declare-codes/redeem", "/characters/plugin/wills/applied");
             for (String path : paths) {
                 assertEquals("{\"realm_id\":\"dev\"}", ProvinceSystemGateway.injectRealmBody(method, path, "{}"));
                 assertEquals("{\"a\":1,\"realm_id\":\"dev\"}", ProvinceSystemGateway.injectRealmBody(method, path+"?x=1", " { \"a\":1 } "));
@@ -78,6 +78,25 @@ class ProvinceSystemGatewayTest {
         assertEquals("{}", ProvinceSystemGateway.injectRealmBody("GET", "/characters/plugin/roster", "{}"));
         assertEquals("{}", ProvinceSystemGateway.injectRealmBody("PUT", "/other", "{}"));
         assertEquals("{}", ProvinceSystemGateway.injectRealmBody("PUT", null, "{}"));
+    }
+    @Test void willRoutesCarryTheRealmAndKeepAnExplicitOne() throws Exception {
+        http.reply(200, "{\"requests\":[]}");
+        assertTrue(ProvinceSystemGateway.request("GET", "/characters/plugin/wills/pending", null).ok);
+        assertEquals("/characters/plugin/wills/pending?realm_id=dev", http.request().path());
+        http.reply(200, "{\"requests\":[]}");
+        assertTrue(ProvinceSystemGateway.request("GET", "/characters/plugin/wills/pending?realm_id=main", null).ok);
+        assertEquals("/characters/plugin/wills/pending?realm_id=main", http.request().path());
+        http.reply(200, "{\"ok\":true}");
+        assertTrue(ProvinceSystemGateway.request("POST", "/characters/plugin/wills/applied", "{\"results\":[]}").ok);
+        var injected = com.google.gson.JsonParser.parseString(http.request().body()).getAsJsonObject();
+        assertEquals("dev", injected.get("realm_id").getAsString()); assertTrue(injected.get("results").isJsonArray());
+        http.reply(200, "{\"ok\":true}");
+        assertTrue(ProvinceSystemGateway.request("POST", "/characters/plugin/wills/applied", "{\"realm_id\":\"main\",\"results\":[]}").ok);
+        assertEquals("{\"realm_id\":\"main\",\"results\":[]}", http.request().body());
+        // The pull is GET-only and the ack is POST-only.
+        assertEquals("/characters/plugin/wills/applied", ProvinceSystemGateway.injectRealmPath("GET", "/characters/plugin/wills/applied"));
+        assertEquals("{}", ProvinceSystemGateway.injectRealmBody("PUT", "/characters/plugin/wills/applied", "{}"));
+        assertEquals("{}", ProvinceSystemGateway.injectRealmBody("POST", "/characters/plugin/wills/pending", "{}"));
     }
     @Test void patchWorksOnSupportedJavaWithoutOpeningJdkModules() throws Exception {
         http.reply(200, "patched");
