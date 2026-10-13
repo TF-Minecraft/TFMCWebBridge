@@ -210,7 +210,8 @@ public final class ProvinceSystemGateway {
 		return equalsPath(barePath, "/characters/plugin/pending")
 			|| equalsPath(barePath, "/skins/plugin/approved")
 			|| equalsPath(barePath, "/drinks/plugin/pending-apply")
-			|| equalsPath(barePath, "/characters/plugin/lore-items/pending");
+			|| equalsPath(barePath, "/characters/plugin/lore-items/pending")
+			|| equalsPath(barePath, "/characters/plugin/wills/pending");
 	}
 
 	private static boolean needsRealmBody(String method, String barePath) {
@@ -223,7 +224,8 @@ public final class ProvinceSystemGateway {
 		// code from being spent on the live realm without a new plugin config key.
 		if ("POST".equals(method)) {
 			return equalsPath(barePath, "/wars/declare-codes/validate")
-				|| equalsPath(barePath, "/wars/declare-codes/redeem");
+				|| equalsPath(barePath, "/wars/declare-codes/redeem")
+				|| equalsPath(barePath, "/characters/plugin/wills/applied");
 		}
 		return false;
 	}
