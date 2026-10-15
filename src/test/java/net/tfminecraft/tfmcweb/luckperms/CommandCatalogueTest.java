@@ -323,7 +323,9 @@ class CommandCatalogueTest {
 		known.put("beta", beta);
 		known.put("gamma", new BrigWrapper("gamma", literal("gamma", c -> 1), first, "delta"));
 		known.put("delta", new BrigWrapper("delta", literal("delta", c -> 2), first));
-		known.put("sub", new BrigWrapper("sub", sub, first, "s", "bare", "empty", "other", "twin"));
+		known.put("sub", new BrigWrapper("sub", sub, first, "s", "bare", "empty", "other", "twin", "runs"));
+		known.put("runs", new BrigWrapper("runs", LiteralArgumentBuilder.literal("runs").executes(c -> 3).then(child)
+			.build(), first, "sub"));
 		known.put("twin", new BrigWrapper("twin", LiteralArgumentBuilder.literal("twin").then(literal("list", c -> 1))
 			.build(), first));
 		known.put("s", new BrigWrapper("s", s, first));
@@ -333,7 +335,8 @@ class CommandCatalogueTest {
 			.then(literal("y", c -> 1)).build(), first));
 
 		assertEquals(
-			List.of("alpha[]", "bare[]", "beta[]", "delta[]", "empty[]", "gamma[]", "other[]", "sub[s]", "twin[]"),
+			List.of("alpha[]", "bare[]", "beta[]", "delta[]", "empty[]", "gamma[]", "other[]", "runs[]", "sub[s]",
+				"twin[]"),
 			CommandCatalogue.entries(known, Map.of()).stream().map(e -> e.name() + e.aliases()).toList());
 	}
 }

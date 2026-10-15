@@ -223,7 +223,7 @@ public final class CommandCatalogue {
 	}
 
 	private static boolean sameNode(CommandNode<?> a, CommandNode<?> b) {
-		if (a.getCommand() != null) {
+		if (a.getCommand() != null || b.getCommand() != null) {
 			return a.getCommand() == b.getCommand();
 		}
 		List<CommandNode<?>> children = List.copyOf(a.getChildren());
