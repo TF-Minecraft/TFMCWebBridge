@@ -5,9 +5,12 @@ import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
 import com.google.gson.JsonObject;
+import com.mojang.brigadier.builder.LiteralArgumentBuilder;
+import com.mojang.brigadier.tree.CommandNode;
 import io.papermc.paper.plugin.configuration.PluginMeta;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -54,6 +57,23 @@ class CommandCatalogueTest {
 		@Override
 		public Plugin getPlugin() {
 			return owner;
+		}
+	}
+
+	/** Named like Paper's wrapper: one object per label, holding that label's Brigadier node. */
+	static final class VanillaCommandWrapper extends Command {
+		final String note = "not a node";
+		final CommandNode<Object> node;
+
+		VanillaCommandWrapper(String label, CommandNode<Object> node) {
+			super(label);
+			this.node = node;
+			setPermission("minecraft.command." + CommandCatalogue.bare(label));
+		}
+
+		@Override
+		public boolean execute(CommandSender sender, String label, String[] args) {
+			return true;
 		}
 	}
 
@@ -119,7 +139,7 @@ class CommandCatalogueTest {
 			Map.of("libsdisguises.seecmd.disguise", true, "libsdisguises.seecmd.hidden", false));
 		Permission hidden = new Permission("libsdisguises.seecmd.hidden", PermissionDefault.OP,
 			Map.of("deep.denied", false, "deep.allowed", true));
-		Permission loop = new Permission("loop", PermissionDefault.TRUE, Map.of("libsdisguises.seecmd", true));
+		Permission loop = new Permission("loop", PermissionDefault.TRUE, Map.of("libsdisguises.seecmd", true, "loop", false));
 		Map<String, Permission> registered = new HashMap<>();
 		for (Permission permission : List.of(seecmd, hidden, loop)) {
 			registered.put(permission.getName(), permission);
@@ -204,5 +224,62 @@ class CommandCatalogueTest {
 			assertEquals(Map.of("TFMCCore", "3.5.3"), server.versions());
 			assertEquals(Map.of("tfmc.open", true), server.defaults());
 		}
+	}
+
+	@Test void joinsPaperWrappersByRedirectAndListedAliases() {
+		CommandNode<Object> teleport = LiteralArgumentBuilder.literal("teleport").executes(c -> 1).build();
+		CommandNode<Object> tp = LiteralArgumentBuilder.literal("tp").redirect(teleport).build();
+		Plugin probe = plugin("Probe", "1");
+		Owned brig = new Owned("probebrig", probe);
+		brig.setAliases(List.of("pb1", "probe:pb1"));
+		Owned brigNamespaced = new Owned("probe:probebrig", probe);
+		brigNamespaced.setAliases(List.of("pb1", "probe:pb1"));
+		Map<String, Command> known = new LinkedHashMap<>();
+		known.put("probe:pb1", new Owned("probe:pb1", probe));
+		known.put("pb1", new Owned("pb1", probe));
+		known.put("probe:probebrig", brigNamespaced);
+		known.put("probebrig", brig);
+		known.put("tp", new VanillaCommandWrapper("tp", tp));
+		known.put("minecraft:tp", new VanillaCommandWrapper("minecraft:tp", tp));
+		known.put("teleport", new VanillaCommandWrapper("teleport", teleport));
+		known.put("minecraft:teleport", new VanillaCommandWrapper("minecraft:teleport", teleport));
+		known.put("minecraft:me", new VanillaCommandWrapper("minecraft:me", null));
+
+		assertEquals(List.of(
+			new Entry("Minecraft", "me", List.of(), null, null, "minecraft.command.me", true),
+			new Entry("Minecraft", "teleport", List.of("tp"), null, null, "minecraft.command.teleport", false),
+			new Entry("Probe", "probebrig", List.of("pb1"), null, null, null, false)
+		), CommandCatalogue.entries(known, Map.of()));
+	}
+
+	@Test void unreadableNodesHaveNoRedirect() {
+		@SuppressWarnings("unchecked")
+		CommandNode<Object> broken = mock(CommandNode.class);
+		when(broken.getRedirect()).thenThrow(new IllegalStateException("shadow"));
+		assertNull(CommandCatalogue.redirectTarget(new VanillaCommandWrapper("x", broken)));
+		assertNull(CommandCatalogue.redirectTarget(new Plain("y")));
+	}
+
+	@Test void aDefaultPermissionBeatsAChildSetFalseElsewhere() {
+		Permission parent = new Permission("example.parent", PermissionDefault.TRUE, Map.of("example.child", false));
+		Permission child = new Permission("example.child", PermissionDefault.TRUE);
+		Map<String, Permission> registered = Map.of(parent.getName(), parent, child.getName(), child);
+		Set<Permission> roots = new LinkedHashSet<>(List.of(parent, child));
+
+		assertEquals(Map.of("example.parent", true, "example.child", true),
+			CommandCatalogue.defaults(roots, registered::get));
+	}
+
+	@Test void accessReadsTheWholePermissionButOnlyDisplaysPartOfIt() {
+		String permission = "example.denied;".repeat(150) + "example.allowed";
+		Function<String, Boolean> member = node -> node.equals("example.allowed") ? Boolean.TRUE : null;
+		Server server = new Server(List.of(new Entry("Example", "long", List.of(), null, null, permission, false)),
+			Map.of(), Map.of());
+
+		JsonObject command = CommandCatalogue.payload(server, Map.of("member", member))
+			.getAsJsonArray("commands").get(0).getAsJsonObject();
+
+		assertEquals("y", command.get("access").getAsString());
+		assertEquals(CommandCatalogue.PERMISSION_MAX, command.get("permission").getAsString().length());
 	}
 }
