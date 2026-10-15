@@ -376,20 +376,17 @@ public final class TokenCommand implements CommandExecutor, TabCompleter {
 		if (args.length == 2 && "create".equalsIgnoreCase(args[0])) {
 			String p = args[1].toLowerCase(Locale.ROOT);
 			List<String> out = new ArrayList<>();
+			if (((canCreate && Cache.isTokenScopeEnabled("skin"))
+				|| (canStaff && Cache.isTokenScopeEnabled("skin_staff"))) && "skin".startsWith(p)) {
+				out.add("skin");
+			}
 			if (canCreate) {
-				if (Cache.isTokenScopeEnabled("skin") && "skin".startsWith(p)) {
-					out.add("skin");
-				}
 				if (Cache.isTokenScopeEnabled("drink") && "drink".startsWith(p)) {
 					out.add("drink");
 				}
 				if (Cache.isTokenScopeEnabled("profile") && "profile".startsWith(p)) {
 					out.add("profile");
 				}
-			} else if (canStaff
-				&& Cache.isTokenScopeEnabled("skin_staff")
-				&& "skin".startsWith(p)) {
-				out.add("skin");
 			}
 			return out;
 		}

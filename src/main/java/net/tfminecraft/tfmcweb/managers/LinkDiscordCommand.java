@@ -1,10 +1,13 @@
 package net.tfminecraft.tfmcweb.managers;
 
+import java.util.List;
+
 import org.bukkit.Bukkit;
 import org.bukkit.ChatColor;
 import org.bukkit.command.Command;
 import org.bukkit.command.CommandExecutor;
 import org.bukkit.command.CommandSender;
+import org.bukkit.command.TabCompleter;
 import org.bukkit.entity.Player;
 import org.bukkit.plugin.java.JavaPlugin;
 
@@ -17,7 +20,7 @@ import net.tfminecraft.tfmcweb.utils.ExpiryFormat;
 /**
  * /linkdiscord — start Discord account link (async HTTP).
  */
-public final class LinkDiscordCommand implements CommandExecutor {
+public final class LinkDiscordCommand implements CommandExecutor, TabCompleter {
 
 	private final JavaPlugin plugin;
 	private final LinkCache linkCache;
@@ -31,6 +34,11 @@ public final class LinkDiscordCommand implements CommandExecutor {
 		this.plugin = plugin;
 		this.linkCache = linkCache;
 		this.gateService = gateService;
+	}
+
+	@Override
+	public List<String> onTabComplete(CommandSender sender, Command command, String alias, String[] args) {
+		return List.of();
 	}
 
 	// Keep the existing legacy text representation, formatting, and exact-string comparisons.
