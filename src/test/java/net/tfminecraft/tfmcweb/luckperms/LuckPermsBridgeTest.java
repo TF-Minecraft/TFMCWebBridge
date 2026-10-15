@@ -11,11 +11,13 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.Function;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 import net.luckperms.api.LuckPerms;
@@ -62,6 +64,10 @@ class LuckPermsBridgeTest {
 	List<List<ChangeResult>> posts;
 	CallResult uploadAnswer = CallResult.success();
 	CallResult postAnswer = CallResult.success();
+	/** Command lists the site accepted. */
+	List<String> commandUploads;
+	CallResult commandsAnswer = CallResult.success();
+	CommandCatalogue.Server commandList = server("tfmc");
 
 	/** In-memory LuckPerms: the snapshot is whatever {@link #data} holds. */
 	static final class RecordingStore implements BridgeStore {
@@ -91,6 +97,10 @@ class LuckPermsBridgeTest {
 				throw snapshotFailure;
 			}
 			return data.deepCopy();
+		}
+
+		@Override public Map<String, Function<String, Boolean>> groupChecks() {
+			return Map.of("default", permission -> null, "staff", permission -> Boolean.TRUE);
 		}
 
 		@Override public ChangeResult apply(Change change) {
@@ -134,6 +144,13 @@ class LuckPermsBridgeTest {
 			}
 			return uploadAnswer;
 		});
+		commandUploads = new ArrayList<>();
+		api.when(() -> LuckPermsBridgeClient.putCommands(anyString())).thenAnswer(call -> {
+			if (commandsAnswer.ok) {
+				commandUploads.add(call.getArgument(0));
+			}
+			return commandsAnswer;
+		});
 		api.when(() -> LuckPermsBridgeClient.snapshotUnchanged(anyString(), anyLong()))
 			.thenReturn(UnchangedResult.answered(true));
 		api.when(() -> LuckPermsBridgeClient.postResults(anyCollection())).thenAnswer(call -> {
@@ -142,7 +159,7 @@ class LuckPermsBridgeTest {
 		});
 		store = new RecordingStore();
 		clock = new AtomicLong(1_791_321_779_000L);
-		bridge = new LuckPermsBridge(plugin, () -> store, () -> worker, clock::get);
+		bridge = new LuckPermsBridge(plugin, () -> store, () -> worker, clock::get, () -> commandList);
 		Cache.luckPermsBridgePublish = true;
 		Cache.luckPermsBridgeApply = true;
 		Cache.luckPermsBridgePollSeconds = 3;
@@ -169,6 +186,14 @@ class LuckPermsBridgeTest {
 
 	void queue(Change... changes) {
 		api.when(LuckPermsBridgeClient::listChanges).thenReturn(ChangesResult.success(List.of(changes)));
+	}
+
+	static CommandCatalogue.Server server(String command) {
+		return new CommandCatalogue.Server(
+			List.of(new CommandCatalogue.Entry("TFMCCore", command, List.of(), null, null, "tfmc.use", false)),
+			Map.of("TFMCCore", "3.5.3"),
+			Map.of()
+		);
 	}
 
 	JsonObject lastUpload() { return JsonParser.parseString(uploads.getLast()).getAsJsonObject(); }
@@ -234,10 +259,10 @@ class LuckPermsBridgeTest {
 	}
 
 	@Test void unavailableLuckPermsLeavesTheBridgeOff() {
-		bridge = new LuckPermsBridge(plugin, () -> null, () -> worker, clock::get);
+		bridge = new LuckPermsBridge(plugin, () -> null, () -> worker, clock::get, () -> commandList);
 		bridge.refresh();
 		verify(logger).warning(contains("unavailable"));
-		bridge = new LuckPermsBridge(plugin, () -> { throw new IllegalStateException("not loaded"); }, () -> worker, clock::get);
+		bridge = new LuckPermsBridge(plugin, () -> { throw new IllegalStateException("not loaded"); }, () -> worker, clock::get, () -> commandList);
 		bridge.refresh();
 		verify(logger).log(eq(Level.WARNING), contains("unavailable"), any(IllegalStateException.class));
 		assertFalse(bridge.isRunning());
@@ -252,6 +277,8 @@ class LuckPermsBridgeTest {
 		LuckPermsBridge real = new LuckPermsBridge(plugin);
 		real.refresh();
 		assertFalse(real.isRunning());
+		// No scheduler outside a server: the real reader fails rather than blocking.
+		assertThrows(NullPointerException.class, () -> LuckPermsBridge.mainThreadReader(plugin).read());
 	}
 
 	@Test void workerIsOneNamedDaemonThread() throws Exception {
@@ -529,5 +556,76 @@ class LuckPermsBridgeTest {
 		}
 		assertTrue(messages.stream().anyMatch(line -> line.contains("luckperms-bridge: ") && line.endsWith("bridge=off (LuckPerms unavailable)")));
 		assertTrue(messages.stream().anyMatch(line -> line.contains("luckperms-bridge: ") && line.contains("bridge=on last-snapshot=never")));
+	}
+
+	JsonObject lastCommands() { return JsonParser.parseString(commandUploads.getLast()).getAsJsonObject(); }
+
+	@Test void commandListWaitsAMinuteThenUploadsWhenChangedOrEveryTenMinutes() {
+		Cache.luckPermsBridgeApply = false;
+		start();
+		tick();
+		clock.addAndGet(59_999L);
+		tick();
+		assertTrue(commandUploads.isEmpty());
+		clock.addAndGet(1L);
+		tick();
+		JsonObject first = lastCommands();
+		assertEquals("main", first.get("server").getAsString());
+		assertEquals(1_791_321_839L, first.get("generated_at").getAsLong());
+		assertEquals(64, first.get("hash").getAsString().length());
+		assertEquals("[\"default\",\"staff\"]", first.getAsJsonArray("groups").toString());
+		JsonObject command = first.getAsJsonArray("commands").get(0).getAsJsonObject();
+		assertEquals("tfmc", command.get("name").getAsString());
+		assertEquals("ny", command.get("access").getAsString());
+
+		clock.addAndGet(60_000L);
+		tick();
+		assertEquals(1, commandUploads.size());
+		commandList = server("guide");
+		clock.addAndGet(60_000L);
+		tick();
+		assertEquals(2, commandUploads.size());
+		assertEquals("guide", lastCommands().getAsJsonArray("commands").get(0).getAsJsonObject().get("name").getAsString());
+		clock.addAndGet(600_000L);
+		tick();
+		assertEquals(3, commandUploads.size());
+	}
+
+	@Test void commandListFailuresAreLoggedOnceAndRetried() {
+		Cache.luckPermsBridgeApply = false;
+		commandsAnswer = CallResult.fail(503, "down");
+		start();
+		tick();
+		clock.addAndGet(60_000L);
+		tick();
+		clock.addAndGet(60_000L);
+		tick();
+		verify(logger, times(1)).warning("[luckperms] command list upload failed (HTTP 503)");
+		commandsAnswer = CallResult.success();
+		clock.addAndGet(60_000L);
+		tick();
+		assertEquals(1, commandUploads.size());
+		verify(logger).info("[luckperms] commands working again");
+
+		IllegalStateException boom = new IllegalStateException("timed out");
+		bridge = new LuckPermsBridge(plugin, () -> store, () -> worker, clock::get, () -> { throw boom; });
+		bridge.refresh();
+		tick();
+		clock.addAndGet(60_000L);
+		tick();
+		verify(logger).log(Level.WARNING, "[luckperms] command list failed", boom);
+	}
+
+	@Test void supersededCommandReadUploadsNothing() {
+		Cache.luckPermsBridgeApply = false;
+		bridge = new LuckPermsBridge(plugin, () -> store, () -> worker, clock::get, () -> {
+			bridge.stop();
+			return commandList;
+		});
+		bridge.refresh();
+		tick();
+		clock.addAndGet(60_000L);
+		tick();
+		assertTrue(commandUploads.isEmpty());
 	}
 }

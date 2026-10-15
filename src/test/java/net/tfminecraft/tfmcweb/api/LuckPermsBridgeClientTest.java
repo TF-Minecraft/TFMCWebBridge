@@ -60,6 +60,26 @@ class LuckPermsBridgeClientTest {
 		assertTrue(unconfigured.error.contains("not configured"));
 	}
 
+	@Test void commandListIsUploadedAndRefusalsAreReported() throws Exception {
+		http.reply(200, "{\"ok\":true}");
+		assertTrue(LuckPermsBridgeClient.putCommands("{\"hash\":\"é\"}").ok);
+		var request = http.request();
+		assertEquals("PUT", request.method());
+		assertEquals("/luckperms/plugin/commands", request.path());
+		assertEquals("{\"hash\":\"é\"}", request.body());
+		assertEquals("application/json", request.contentType());
+		http.reply(200, "{\"ok\":false}");
+		CallResult refused = LuckPermsBridgeClient.putCommands("{}");
+		assertFalse(refused.ok);
+		assertEquals("Command list was not accepted", refused.error);
+		http.request();
+		http.reply(400, "{\"detail\":\"bad_commands\"}");
+		CallResult bad = LuckPermsBridgeClient.putCommands("{}");
+		assertEquals(400, bad.status);
+		assertEquals("bad_commands", bad.error);
+		http.request();
+	}
+
 	@Test void unchangedCheckTellsCurrentFromNeedFull() throws Exception {
 		http.reply(200, "{\"ok\":true}");
 		UnchangedResult current = LuckPermsBridgeClient.snapshotUnchanged("abc", 7L);

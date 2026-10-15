@@ -9,6 +9,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.TreeMap;
 import java.util.UUID;
 import java.util.function.Function;
 import java.util.function.LongSupplier;
@@ -24,6 +25,7 @@ import net.luckperms.api.LuckPerms;
 import net.luckperms.api.LuckPermsProvider;
 import net.luckperms.api.actionlog.Action;
 import net.luckperms.api.actionlog.ActionLogger;
+import net.luckperms.api.cacheddata.CachedPermissionData;
 import net.luckperms.api.messaging.MessagingService;
 import net.luckperms.api.model.data.DataMutateResult;
 import net.luckperms.api.model.data.NodeMap;
@@ -35,8 +37,10 @@ import net.luckperms.api.node.Node;
 import net.luckperms.api.node.NodeBuilder;
 import net.luckperms.api.node.NodeEqualityPredicate;
 import net.luckperms.api.node.matcher.NodeMatcher;
+import net.luckperms.api.query.QueryOptions;
 import net.luckperms.api.track.Track;
 import net.luckperms.api.track.TrackManager;
+import net.luckperms.api.util.Tristate;
 import net.tfminecraft.tfmcweb.api.LuckPermsBridgeClient.Change;
 import net.tfminecraft.tfmcweb.api.LuckPermsBridgeClient.ChangeResult;
 import net.tfminecraft.tfmcweb.api.LuckPermsBridgeClient.NodeSpec;
@@ -141,6 +145,24 @@ public final class LuckPermsBridgeStore implements BridgeStore {
 		root.add("tracks", trackArray);
 		root.add("users", userArray);
 		return root;
+	}
+
+	@Override
+	public Map<String, Function<String, Boolean>> groupChecks() {
+		QueryOptions options = LuckPermsProvider.get().getContextManager().getStaticQueryOptions();
+		Map<String, Function<String, Boolean>> checks = new TreeMap<>();
+		for (Group group : groups.getLoadedGroups()) {
+			CachedPermissionData data = group.getCachedData().getPermissionData(options);
+			checks.put(group.getName(), permission -> answer(data.checkPermission(permission)));
+		}
+		return checks;
+	}
+
+	static Boolean answer(Tristate value) {
+		if (value == Tristate.UNDEFINED) {
+			return null;
+		}
+		return Boolean.valueOf(value.asBoolean());
 	}
 
 	@Override

@@ -57,6 +57,12 @@ import net.tfminecraft.tfmcweb.api.LuckPermsBridgeClient.Op;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import java.util.function.Function;
+import net.luckperms.api.cacheddata.CachedDataManager;
+import net.luckperms.api.cacheddata.CachedPermissionData;
+import net.luckperms.api.context.ContextManager;
+import net.luckperms.api.query.QueryOptions;
+import net.luckperms.api.util.Tristate;
 import org.mockito.ArgumentCaptor;
 import org.mockito.MockedStatic;
 
@@ -690,5 +696,29 @@ class LuckPermsBridgeStoreTest {
 		when(tracks.loadTrack("broken")).thenReturn(CompletableFuture.failedFuture(new IllegalStateException("db")));
 		assertEquals("save_failed", store.apply(change("track", "broken", op("delete_track"))).error);
 		verifyNoInteractions(actions, messaging);
+	}
+
+	@Test void groupChecksAskEachGroupOnThisServer() {
+		QueryOptions options = mock(QueryOptions.class);
+		ContextManager contexts = mock(ContextManager.class);
+		when(contexts.getStaticQueryOptions()).thenReturn(options);
+		when(LuckPermsProvider.get().getContextManager()).thenReturn(contexts);
+		Group staff = mock(Group.class);
+		when(staff.getName()).thenReturn("staff");
+		CachedDataManager cached = mock(CachedDataManager.class);
+		CachedPermissionData permissions = mock(CachedPermissionData.class);
+		when(staff.getCachedData()).thenReturn(cached);
+		when(cached.getPermissionData(options)).thenReturn(permissions);
+		when(permissions.checkPermission("a")).thenReturn(Tristate.TRUE);
+		when(permissions.checkPermission("b")).thenReturn(Tristate.FALSE);
+		when(permissions.checkPermission("c")).thenReturn(Tristate.UNDEFINED);
+		when(groups.getLoadedGroups()).thenReturn(Set.of(staff));
+
+		Map<String, Function<String, Boolean>> checks = store().groupChecks();
+
+		assertEquals(Set.of("staff"), checks.keySet());
+		assertEquals(Boolean.TRUE, checks.get("staff").apply("a"));
+		assertEquals(Boolean.FALSE, checks.get("staff").apply("b"));
+		assertNull(checks.get("staff").apply("c"));
 	}
 }

@@ -31,6 +31,7 @@ public final class LuckPermsBridgeClient {
 	static final String SNAPSHOT_UNCHANGED = "/luckperms/plugin/snapshot/unchanged";
 	static final String CHANGES = "/luckperms/plugin/changes";
 	static final String RESULTS = "/luckperms/plugin/changes/results";
+	static final String COMMANDS = "/luckperms/plugin/commands";
 
 	private LuckPermsBridgeClient() {}
 
@@ -366,6 +367,24 @@ public final class LuckPermsBridgeClient {
 		JsonObject root = object(raw.body);
 		if (root == null || !isTrue(root.get("ok"))) {
 			return CallResult.fail(raw.status, "Snapshot was not accepted");
+		}
+		return CallResult.success();
+	}
+
+	/** Replaces the site's command list for the Commands tab. */
+	public static CallResult putCommands(String json) {
+		GatewayResult raw = ProvinceSystemGateway.requestBytes(
+			"PUT",
+			COMMANDS,
+			json.getBytes(StandardCharsets.UTF_8),
+			"application/json"
+		);
+		if (!raw.ok) {
+			return CallResult.fail(raw.status, raw.error);
+		}
+		JsonObject root = object(raw.body);
+		if (root == null || !isTrue(root.get("ok"))) {
+			return CallResult.fail(raw.status, "Command list was not accepted");
 		}
 		return CallResult.success();
 	}
