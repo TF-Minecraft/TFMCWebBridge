@@ -41,6 +41,15 @@ public final class LuckPermsBridge {
 	static final int REMEMBERED_RESULTS = 500;
 	/** Short, so a reload never stalls the main thread; an older pass that outlives it is harmless. */
 	static final long STOP_WAIT_SECONDS = 1;
+	/** Commands change rarely: check each minute, upload when changed or every ten minutes. */
+	static final long COMMANDS_CHECK_MILLIS = 60_000L;
+	static final long COMMANDS_RESEND_MILLIS = 600_000L;
+
+	/** Reads the server's commands; blocks the worker until the main thread answers. */
+	@FunctionalInterface
+	public interface CommandReader {
+		CommandCatalogue.Server read() throws Exception;
+	}
 
 	@FunctionalInterface
 	public interface StoreOpener {
@@ -51,6 +60,7 @@ public final class LuckPermsBridge {
 	private final StoreOpener opener;
 	private final Supplier<ScheduledExecutorService> workers;
 	private final LongSupplier clock;
+	private final CommandReader commands;
 
 	/** Recent results by change id: a guard so a change seen twice is never applied twice. */
 	private final Map<Long, ChangeResult> remembered = new LinkedHashMap<>() {
@@ -81,23 +91,38 @@ public final class LuckPermsBridge {
 	private long stateGeneration = -1L;
 	private long nextSnapshotAt;
 	private String uploadedHash;
+	private long nextCommandsAt;
+	private String commandsHash;
+	private long commandsUploadedAt;
 	/** Last revision handed out; survives reloads, and the clock carries it across restarts. */
 	private long lastRevision;
 
 	public LuckPermsBridge(JavaPlugin plugin) {
-		this(plugin, LuckPermsBridge::openLuckPerms, LuckPermsBridge::newWorker, System::currentTimeMillis);
+		this(
+			plugin,
+			LuckPermsBridge::openLuckPerms,
+			LuckPermsBridge::newWorker,
+			System::currentTimeMillis,
+			mainThreadReader(plugin)
+		);
+	}
+
+	static CommandReader mainThreadReader(JavaPlugin plugin) {
+		return () -> CommandCatalogue.readOnMainThread(plugin);
 	}
 
 	LuckPermsBridge(
 		JavaPlugin plugin,
 		StoreOpener opener,
 		Supplier<ScheduledExecutorService> workers,
-		LongSupplier clock
+		LongSupplier clock,
+		CommandReader commands
 	) {
 		this.plugin = plugin;
 		this.opener = opener;
 		this.workers = workers;
 		this.clock = clock;
+		this.commands = commands;
 	}
 
 	/**
@@ -220,6 +245,9 @@ public final class LuckPermsBridge {
 				stateGeneration = run.generation();
 				nextSnapshotAt = 0L;
 				uploadedHash = null;
+				// Wait a minute, so a starting server has registered every plugin's commands.
+				nextCommandsAt = clock.getAsLong() + COMMANDS_CHECK_MILLIS;
+				commandsHash = null;
 				failing.clear();
 			}
 			long now = clock.getAsLong();
@@ -235,6 +263,36 @@ public final class LuckPermsBridge {
 				nextSnapshotAt = now + run.snapshotMillis();
 				publish(run);
 			}
+			if (current(run) && now >= nextCommandsAt) {
+				nextCommandsAt = now + COMMANDS_CHECK_MILLIS;
+				publishCommands(run, now);
+			}
+		}
+	}
+
+	private void publishCommands(Run run, long now) {
+		try {
+			JsonObject data = CommandCatalogue.payload(commands.read(), run.store().groupChecks());
+			if (!current(run)) {
+				return;
+			}
+			String hash = sha256(data.toString());
+			if (hash.equals(commandsHash) && now - commandsUploadedAt < COMMANDS_RESEND_MILLIS) {
+				return;
+			}
+			data.addProperty("server", TFMCWeb.getRealmId());
+			data.addProperty("generated_at", now / 1000L);
+			data.addProperty("hash", hash);
+			CallResult upload = LuckPermsBridgeClient.putCommands(data.toString());
+			if (!upload.ok) {
+				fail("commands", "[luckperms] command list upload failed (" + describe(upload.status) + ")", null);
+				return;
+			}
+			commandsHash = hash;
+			commandsUploadedAt = now;
+			recover("commands");
+		} catch (Exception e) {
+			fail("commands", "[luckperms] command list failed", e);
 		}
 	}
 

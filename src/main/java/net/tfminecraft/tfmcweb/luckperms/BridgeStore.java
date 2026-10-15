@@ -1,5 +1,8 @@
 package net.tfminecraft.tfmcweb.luckperms;
 
+import java.util.Map;
+import java.util.function.Function;
+
 import com.google.gson.JsonObject;
 
 import net.tfminecraft.tfmcweb.api.LuckPermsBridgeClient.Change;
@@ -32,4 +35,10 @@ public interface BridgeStore {
 	 * saves once, or changes nothing. Never throws for a refused change.
 	 */
 	ChangeResult apply(Change change);
+
+	/**
+	 * @return each group's check on this server: true or false as LuckPerms resolves the
+	 *     permission, or null when the group has no node for it
+	 */
+	Map<String, Function<String, Boolean>> groupChecks();
 }
