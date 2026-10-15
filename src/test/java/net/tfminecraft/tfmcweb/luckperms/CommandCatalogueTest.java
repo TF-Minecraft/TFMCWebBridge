@@ -77,6 +77,33 @@ class CommandCatalogueTest {
 		}
 	}
 
+	/** Like Paper's plugin wrapper: a Brigadier node owned by a plugin. */
+	static final class BrigWrapper extends Command implements PluginIdentifiableCommand {
+		final CommandNode<Object> node;
+		final Plugin owner;
+
+		BrigWrapper(String label, CommandNode<Object> node, Plugin owner, String... aliases) {
+			super(label);
+			this.node = node;
+			this.owner = owner;
+			setAliases(List.of(aliases));
+		}
+
+		@Override
+		public boolean execute(CommandSender sender, String label, String[] args) {
+			return true;
+		}
+
+		@Override
+		public Plugin getPlugin() {
+			return owner;
+		}
+	}
+
+	static CommandNode<Object> literal(String label, com.mojang.brigadier.Command<Object> run) {
+		return LiteralArgumentBuilder.literal(label).executes(run).build();
+	}
+
 	static Plugin plugin(String name, String version) {
 		Plugin plugin = mock(Plugin.class);
 		PluginMeta meta = mock(PluginMeta.class);
@@ -230,15 +257,13 @@ class CommandCatalogueTest {
 		CommandNode<Object> teleport = LiteralArgumentBuilder.literal("teleport").executes(c -> 1).build();
 		CommandNode<Object> tp = LiteralArgumentBuilder.literal("tp").redirect(teleport).build();
 		Plugin probe = plugin("Probe", "1");
-		Owned brig = new Owned("probebrig", probe);
-		brig.setAliases(List.of("pb1", "probe:pb1"));
-		Owned brigNamespaced = new Owned("probe:probebrig", probe);
-		brigNamespaced.setAliases(List.of("pb1", "probe:pb1"));
+		com.mojang.brigadier.Command<Object> run = c -> 1;
 		Map<String, Command> known = new LinkedHashMap<>();
-		known.put("probe:pb1", new Owned("probe:pb1", probe));
-		known.put("pb1", new Owned("pb1", probe));
-		known.put("probe:probebrig", brigNamespaced);
-		known.put("probebrig", brig);
+		known.put("probe:pb1", new BrigWrapper("probe:pb1", literal("probe:pb1", run), probe));
+		known.put("pb1", new BrigWrapper("pb1", literal("pb1", run), probe));
+		known.put("probe:probebrig", new BrigWrapper("probe:probebrig", literal("probe:probebrig", run), probe,
+			"pb1", "probe:pb1"));
+		known.put("probebrig", new BrigWrapper("probebrig", literal("probebrig", run), probe, "pb1", "probe:pb1"));
 		known.put("tp", new VanillaCommandWrapper("tp", tp));
 		known.put("minecraft:tp", new VanillaCommandWrapper("minecraft:tp", tp));
 		known.put("teleport", new VanillaCommandWrapper("teleport", teleport));
@@ -281,5 +306,34 @@ class CommandCatalogueTest {
 
 		assertEquals("y", command.get("access").getAsString());
 		assertEquals(CommandCatalogue.PERMISSION_MAX, command.get("permission").getAsString().length());
+	}
+
+	@Test void aStaleAliasDoesNotSwallowAnotherCommand() {
+		Plugin first = plugin("First", "1");
+		Owned alpha = new Owned("alpha", first);
+		alpha.setAliases(List.of("beta"));
+		alpha.setPermission("first.alpha");
+		Owned beta = new Owned("beta", first);
+		beta.setPermission("first.beta");
+		CommandNode<Object> child = LiteralArgumentBuilder.literal("list").executes(c -> 1).build();
+		CommandNode<Object> sub = LiteralArgumentBuilder.literal("sub").then(child).build();
+		CommandNode<Object> s = LiteralArgumentBuilder.literal("s").then(child).build();
+		Map<String, Command> known = new LinkedHashMap<>();
+		known.put("alpha", alpha);
+		known.put("beta", beta);
+		known.put("gamma", new BrigWrapper("gamma", literal("gamma", c -> 1), first, "delta"));
+		known.put("delta", new BrigWrapper("delta", literal("delta", c -> 2), first));
+		known.put("sub", new BrigWrapper("sub", sub, first, "s", "bare", "empty", "other", "twin"));
+		known.put("twin", new BrigWrapper("twin", LiteralArgumentBuilder.literal("twin").then(literal("list", c -> 1))
+			.build(), first));
+		known.put("s", new BrigWrapper("s", s, first));
+		known.put("bare", new Owned("bare", first));
+		known.put("empty", new BrigWrapper("empty", LiteralArgumentBuilder.literal("empty").build(), first));
+		known.put("other", new BrigWrapper("other", LiteralArgumentBuilder.literal("other").then(literal("x", c -> 1))
+			.then(literal("y", c -> 1)).build(), first));
+
+		assertEquals(
+			List.of("alpha[]", "bare[]", "beta[]", "delta[]", "empty[]", "gamma[]", "other[]", "sub[s]", "twin[]"),
+			CommandCatalogue.entries(known, Map.of()).stream().map(e -> e.name() + e.aliases()).toList());
 	}
 }

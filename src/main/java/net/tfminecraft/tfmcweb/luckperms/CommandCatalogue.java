@@ -125,7 +125,7 @@ public final class CommandCatalogue {
 			}
 			owners.put(command, owner(command, namespace, pluginNames));
 		}
-		Map<String, String> aliasOf = new HashMap<>();
+		Map<String, Command> aliasOf = new HashMap<>();
 		for (Map.Entry<String, Command> entry : known.entrySet()) {
 			Command command = entry.getValue();
 			if (command == null) {
@@ -135,7 +135,7 @@ public final class CommandCatalogue {
 			String name = bare(command.getName());
 			for (String alias : command.getAliases()) {
 				if (!bare(alias).equals(name)) {
-					aliasOf.putIfAbsent(owner + ':' + bare(alias), name);
+					aliasOf.putIfAbsent(owner + ':' + bare(alias), command);
 				}
 			}
 		}
@@ -150,7 +150,9 @@ public final class CommandCatalogue {
 			String label = bare(command.getName());
 			String name = redirectTarget(command);
 			if (name == null) {
-				name = aliasOf.getOrDefault(owner + ':' + label, label);
+				Command listing = aliasOf.get(owner + ':' + label);
+				// An alias list can outlive the alias: only join a label that runs the same command.
+				name = listing != null && sameCommand(listing, command) ? bare(listing.getName()) : label;
 			}
 			String id = owner + ':' + name;
 			boolean plainKey = entry.getKey().indexOf(':') < 0;
@@ -212,6 +214,36 @@ public final class CommandCatalogue {
 
 	/** For a Brigadier wrapper whose node redirects (vanilla /tp to /teleport), the target's name. */
 	static String redirectTarget(Command command) {
+		return withNode(command, node -> node.getRedirect() == null ? null : bare(node.getRedirect().getName()), null);
+	}
+
+	/** Two Brigadier labels with the same executor or the same subcommands. */
+	static boolean sameCommand(Command first, Command second) {
+		return withNode(first, a -> withNode(second, b -> sameNode(a, b), false), false);
+	}
+
+	private static boolean sameNode(CommandNode<?> a, CommandNode<?> b) {
+		if (a.getCommand() != null) {
+			return a.getCommand() == b.getCommand();
+		}
+		List<CommandNode<?>> children = List.copyOf(a.getChildren());
+		List<CommandNode<?>> others = List.copyOf(b.getChildren());
+		if (children.isEmpty() || children.size() != others.size()) {
+			return false;
+		}
+		for (int i = 0; i < children.size(); i++) {
+			if (children.get(i) != others.get(i)) {
+				return false;
+			}
+		}
+		return true;
+	}
+
+	/**
+	 * Applies {@code use} to the Brigadier node a Paper wrapper holds, read by reflection.
+	 * Other commands, and nodes that refuse to be read, give {@code fallback}.
+	 */
+	private static <T> T withNode(Command command, Function<CommandNode<?>, T> use, T fallback) {
 		for (Class<?> type = command.getClass(); type != Command.class; type = type.getSuperclass()) {
 			for (Field field : type.getDeclaredFields()) {
 				if (!CommandNode.class.isAssignableFrom(field.getType())) {
@@ -220,14 +252,13 @@ public final class CommandCatalogue {
 				try {
 					field.setAccessible(true);
 					CommandNode<?> node = (CommandNode<?>) field.get(command);
-					CommandNode<?> target = node == null ? null : node.getRedirect();
-					return target == null ? null : bare(target.getName());
+					return node == null ? fallback : use.apply(node);
 				} catch (ReflectiveOperationException | RuntimeException e) {
-					return null;
+					return fallback;
 				}
 			}
 		}
-		return null;
+		return fallback;
 	}
 
 	/** Drops the usage Bukkit and Paper fill in when a plugin sets none. */
