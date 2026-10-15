@@ -66,6 +66,22 @@ class TokenCommandTest {
         when(f.player.isOnline()).thenReturn(false);f.messages.clear();run(f.player,"resetcooldowns","Ada");assertTrue(f.messages.isEmpty());
         f.api.when(()->ProvinceSystemClient.resetCosmeticMintCooldowns(f.id.toString(),f.id.toString())).thenReturn(SimpleResult.success());run(f.player,"resetcooldowns","Ada");assertTrue(f.messages.isEmpty());
     }
+    @Test void ordinaryCreatePermissionDoesNotHideTheEnabledStaffSkinRoute() {
+        f.permissions(f.player,true);
+        Cache.tokenEnabledScopes=List.of("skin_staff");
+        when(f.player.hasPermission("tfmcweb.token.create")).thenReturn(false);
+        assertEquals(List.of("skin"),command.onTabComplete(f.player,null,"token",new String[]{"create",""}));
+        when(f.player.hasPermission("tfmcweb.token.create")).thenReturn(true);
+        assertEquals(List.of("skin"),command.onTabComplete(f.player,null,"token",new String[]{"create",""}));
+        assertEquals(List.of("skin"),command.onTabComplete(f.player,null,"token",new String[]{"CREATE","S"}));
+        assertEquals(List.of("staff"),command.onTabComplete(f.player,null,"token",new String[]{"create","skin",""}));
+        when(f.player.hasPermission("tfmcweb.token.create.staff")).thenReturn(false);
+        assertTrue(command.onTabComplete(f.player,null,"token",new String[]{"create",""}).isEmpty());
+        Cache.tokenEnabledScopes=List.of("skin","skin_staff");
+        when(f.player.hasPermission("tfmcweb.token.create.staff")).thenReturn(true);
+        assertEquals(List.of("skin"),command.onTabComplete(f.player,null,"token",new String[]{"create",""}));
+    }
+
     @Test void completionsRespectPermissionsEnabledScopesAndPrefix() {
         assertTrue(command.onTabComplete(f.player,null,"token",new String[]{""}).isEmpty());f.permissions(f.player,true);
         assertEquals(List.of("create","resetcooldowns"),command.onTabComplete(f.player,null,"token",new String[]{""}));

@@ -19,6 +19,29 @@ class PlayerAndAdminCommandsTest {
     @BeforeEach void setup() throws Exception {f=new CommandFixture();}
     @AfterEach void cleanup() throws Exception {f.close();}
     void run(CommandExecutor command,org.bukkit.command.CommandSender sender,String...args){assertTrue(command.onCommand(sender,null,"cmd",args));}
+    @Test void operandFreeDiscordCommandsNeverSuggestPlayerNames() {
+        var link=new LinkDiscordCommand(f.plugin,f.cache,f.gate);
+        var unlink=new UnlinkDiscordCommand(f.plugin,f.cache,f.gate);
+        for(var sender:List.of(f.player,f.console)) {
+            for(String[] args:List.of(new String[0],new String[]{""},new String[]{"A"},new String[]{"Ada",""})) {
+                assertTrue(link.onTabComplete(sender,null,"linkdiscord",args).isEmpty());
+                assertTrue(unlink.onTabComplete(sender,null,"unlinkdiscord",args).isEmpty());
+            }
+        }
+    }
+
+    @Test void warningOnlyCompletesTheAuthorizedTargetArgument() {
+        var warning=new WarningCommand(f.plugin,f.cache);
+        assertTrue(warning.onTabComplete(f.console,null,"warning",new String[]{""}).isEmpty());
+        f.permissions(f.console,true);
+        assertEquals(List.of("Ada"),warning.onTabComplete(f.console,null,"warning",new String[]{""}));
+        assertEquals(List.of("Ada"),warning.onTabComplete(f.console,null,"warning",new String[]{"aD"}));
+        assertTrue(warning.onTabComplete(f.console,null,"warning",new String[]{"zzz"}).isEmpty());
+        for(String[] args:List.of(new String[0],new String[]{"Ada",""},new String[]{"Ada","reason",""})) {
+            assertTrue(warning.onTabComplete(f.console,null,"warning",args).isEmpty());
+        }
+    }
+
     @Test void linkShowsCodesFailuresOrExistingIdentityAndIgnoresOfflinePlayer() {
         var cmd=new LinkDiscordCommand(f.plugin,f.cache,f.gate);run(cmd,f.console);assertTrue(f.contains("Players only"));
         for(CodeResult result:List.of(CodeResult.fail(null),CodeResult.fail("backend"),CodeResult.alreadyLinked(" AdaDiscord "),CodeResult.alreadyLinked(" "),CodeResult.success("ABC",Instant.now().plusSeconds(4000).toString()),CodeResult.success("ABC",null))){
