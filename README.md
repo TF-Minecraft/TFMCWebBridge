@@ -1,8 +1,8 @@
-# TFMCWeb
+# TFMCWebBridge
 
 > Connecting TF-Minecraft gameplay, website features, and Discord identity.
 
-TFMCWeb is the Minecraft-side bridge to the TF-Minecraft website services. It helps players connect their Discord account, obtain access codes for website features, and receive account updates in-game.
+TFMCWebBridge is the repository for the `TFMCWeb` Minecraft plugin, the bridge to the TF-Minecraft website services. It helps players connect their Discord account, obtain access codes for website features, and receive account updates in-game.
 
 The same bridge connects selected moderation and roleplay events to the wider community services, keeping account identity and supported player benefits aligned across them.
 
@@ -12,7 +12,7 @@ The same bridge connects selected moderation and roleplay events to the wider co
 - **Website feature codes** — issues scoped codes for skins, drinks, and player profiles, subject to access rules and cooldowns.
 - **Account status updates** — processes website notices about linking and eligibility, including RPCharacters survival access checks.
 - **Moderation connections** — sends player warnings, and bans, unbans and expired timed bans from the server ban list, to the linked services so the Discord Banned role follows the in-game ban.
-- **Supporter benefits** — links Patreon accounts and synchronizes supported LuckPerms tiers through ProvinceSystem.
+- **Supporter benefits** — links Patreon accounts and synchronizes supported LuckPerms tiers through TFMCWeb.
 - **Player metadata** — shares resolved player permissions and entitlements with the website.
 - **Bird-mail notifications** — provides the connection for BirdMessenger arrival notifications to linked Discord accounts.
 - **Staff-panel LuckPerms bridge** — publishes LuckPerms groups, tracks and player permissions to the website's staff panel, and applies the rank and permission changes staff queue there through LuckPerms.
@@ -21,14 +21,14 @@ These features rely on the corresponding TF-Minecraft services and gameplay inte
 
 ## Documentation
 
-[Project documentation](https://github.com/TF-Minecraft/Docs/blob/main/projects/TFMCWeb/README.md)
+[Project documentation](https://github.com/TF-Minecraft/Docs/blob/main/projects/TFMCWebBridge/README.md)
 
 Technical documentation is maintained in [TF-Minecraft/Docs](https://github.com/TF-Minecraft/Docs).
 
 ## Tests and coverage
 
 Run `mvn clean verify` with Java 21 after preparing the dependencies in the
-[project guide](https://github.com/TF-Minecraft/Docs/blob/main/projects/TFMCWeb/README.md#build-and-dependencies).
+[project guide](https://github.com/TF-Minecraft/Docs/blob/main/projects/TFMCWebBridge/README.md#build-and-dependencies).
 JUnit 5, Mockito and MockBukkit exercise plugin logic with mocked server APIs.
 JaCoCo enforces 100% production line coverage with no class or package exclusions;
 branch and instruction coverage are reported separately.
