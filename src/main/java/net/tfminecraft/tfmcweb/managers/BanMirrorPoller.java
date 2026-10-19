@@ -7,6 +7,7 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Date;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -20,6 +21,7 @@ import org.bukkit.Bukkit;
 import org.bukkit.ban.ProfileBanList;
 import org.bukkit.configuration.ConfigurationSection;
 import org.bukkit.configuration.file.YamlConfiguration;
+import org.bukkit.entity.Player;
 import org.bukkit.plugin.java.JavaPlugin;
 import org.bukkit.scheduler.BukkitTask;
 
@@ -28,20 +30,26 @@ import com.destroystokyo.paper.profile.PlayerProfile;
 import io.papermc.paper.ban.BanListType;
 import net.tfminecraft.tfmcweb.Cache;
 import net.tfminecraft.tfmcweb.api.ProvinceSystemClient;
+import net.tfminecraft.tfmcweb.api.ProvinceSystemClient.BanSync;
 import net.tfminecraft.tfmcweb.api.ProvinceSystemClient.IdentityStatus;
 import net.tfminecraft.tfmcweb.api.ProvinceSystemClient.MirrorResult;
+import net.tfminecraft.tfmcweb.api.ProvinceSystemClient.SyncedBan;
 import net.tfminecraft.tfmcweb.cache.LinkCache;
 
 /**
  * Mirrors the server's player ban list to the ProvinceSystem moderation outbox.
  * EssentialsX has no ban event and timed bans expire silently, so the list is
  * diffed on a timer: new entries post a ban, removed or expired entries post an
- * unban (which clears the Discord Banned role).
+ * unban (which clears the Discord Banned role). With ban-mirror.sync, bans and
+ * unbans the other servers reported are then applied here too.
  */
 public final class BanMirrorPoller {
 
 	static final String STATE_FILE = "ban-mirror.yml";
 	static final String EXPIRED_STAFF = "Ban expired";
+	static final String SYNC_SOURCE = "TFMC ban sync";
+	/** Bans whose end times are this close are the same ban (matches the API). */
+	static final long SAME_BAN_MS = 10L * 60_000L;
 
 	private static final int REASON_MAX = 500;
 	private static final int STAFF_NAME_MAX = 32;
@@ -54,6 +62,7 @@ public final class BanMirrorPoller {
 	private final File stateFile;
 	private final AtomicBoolean busy = new AtomicBoolean();
 	private final Set<UUID> warned = ConcurrentHashMap.newKeySet();
+	private final AtomicBoolean syncWarned = new AtomicBoolean();
 	/** Bans already mirrored; null until the first list has been adopted. */
 	private Map<UUID, BanRecord> known;
 	private BukkitTask task;
@@ -108,19 +117,118 @@ public final class BanMirrorPoller {
 			return;
 		}
 		List<Change> changes = diff(known, current, now);
-		if (changes.isEmpty()) {
+		boolean sync = Cache.banMirrorSync;
+		if (changes.isEmpty() && !sync) {
 			busy.set(false);
 			return;
 		}
 		Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
+			boolean applying = false;
 			try {
 				for (Change change : changes) {
 					post(change);
 				}
+				// Local changes are posted first, so the list fetched next already has them.
+				if (sync) {
+					BanSync remote = fetchSync();
+					if (remote != null) {
+						Bukkit.getScheduler().runTask(plugin, () -> applySync(remote));
+						applying = true;
+					}
+				}
 			} finally {
-				saveAndRelease();
+				if (!applying) {
+					saveAndRelease();
+				}
 			}
 		});
+	}
+
+	private BanSync fetchSync() {
+		BanSync remote = ProvinceSystemClient.getBanSync();
+		if (!remote.ok) {
+			if (syncWarned.compareAndSet(false, true)) {
+				plugin.getLogger().warning(
+					"[ban-sync] could not read bans from the API: " + remote.error + " (retrying quietly)"
+				);
+			}
+			return null;
+		}
+		syncWarned.set(false);
+		return remote;
+	}
+
+	/** Main thread: apply bans and unbans another server reported, then save and release. */
+	void applySync(BanSync remote) {
+		try {
+			long now = System.currentTimeMillis();
+			ProfileBanList list = Bukkit.getBanList(BanListType.PROFILE);
+			Map<UUID, BanRecord> current = readBanList(now);
+			Set<UUID> banned = new HashSet<>();
+			Set<UUID> remoteBanned = new HashSet<>();
+			for (SyncedBan ban : remote.bans) {
+				remoteBanned.add(ban.id);
+				if (shouldApply(ban, known.get(ban.id), current.get(ban.id), now)) {
+					applyBan(list, ban);
+					banned.add(ban.id);
+				}
+			}
+			for (Map.Entry<UUID, Long> unban : remote.unbans.entrySet()) {
+				UUID id = unban.getKey();
+				if (remoteBanned.contains(id)) {
+					continue;
+				}
+				BanRecord local = current.get(id);
+				BanRecord was = known.get(id);
+				// Only lift a ban this server already mirrored and that is older than the unban.
+				if (local == null || was == null || was.created != local.created
+					|| local.created <= 0L || local.created > unban.getValue()) {
+					continue;
+				}
+				list.pardon(Bukkit.createProfile(id, local.name));
+				known.remove(id);
+				plugin.getLogger().info("[ban-sync] lifted the ban on " + local.name + " (unbanned on another server)");
+			}
+			if (!banned.isEmpty()) {
+				Map<UUID, BanRecord> fresh = readBanList(now);
+				for (UUID id : banned) {
+					BanRecord record = fresh.get(id);
+					if (record != null) {
+						known.put(id, record);
+					}
+				}
+			}
+		} catch (RuntimeException e) {
+			plugin.getLogger().warning("[ban-sync] could not apply bans from the API: " + e);
+		}
+		Bukkit.getScheduler().runTaskAsynchronously(plugin, this::saveAndRelease);
+	}
+
+	static boolean shouldApply(SyncedBan ban, BanRecord was, BanRecord local, long now) {
+		if (ban.expiresAt > 0L && ban.expiresAt <= now) {
+			return false;
+		}
+		if (local == null) {
+			// Mirrored here but gone from the list: a local unban the API has not had yet.
+			return was == null;
+		}
+		// A newer ban with a different length replaces this server's copy.
+		return ban.bannedAt > local.created && Math.abs(ban.expiresAt - local.expires) > SAME_BAN_MS;
+	}
+
+	private void applyBan(ProfileBanList list, SyncedBan ban) {
+		Date expires = ban.expiresAt > 0L ? new Date(ban.expiresAt) : null;
+		String source = ban.staffName != null && !ban.staffName.isBlank() ? ban.staffName : SYNC_SOURCE;
+		Player online = Bukkit.getPlayer(ban.id);
+		if (online != null) {
+			online.ban(ban.reason, expires, source, true);
+		} else {
+			list.addBan(Bukkit.createProfile(ban.id, ban.name), ban.reason, expires, source);
+		}
+		plugin.getLogger().info(
+			"[ban-sync] applied the ban on " + ban.name + " from another server ("
+				+ formatDuration(ban.expiresAt, ban.bannedAt) + ")"
+		);
 	}
 
 	private void saveAndRelease() {
@@ -140,13 +248,13 @@ public final class BanMirrorPoller {
 			if (id == null) {
 				continue;
 			}
-			long expires = millis(entry.getExpiration());
+			long expires = seconds(millis(entry.getExpiration()));
 			if (expires > 0L && expires <= now) {
 				continue;
 			}
 			bans.put(id, new BanRecord(
 				profile.getName(),
-				millis(entry.getCreated()),
+				seconds(millis(entry.getCreated())),
 				expires,
 				entry.getReason(),
 				entry.getSource()
@@ -187,7 +295,9 @@ public final class BanMirrorPoller {
 			name,
 			change.banned ? cleanReason(ban.reason) : null,
 			change.banned ? formatDuration(ban.expires, banStart(ban)) : null,
-			cleanDisplay(change.staff, STAFF_NAME_MAX)
+			cleanDisplay(change.staff, STAFF_NAME_MAX),
+			ban.created,
+			ban.expires
 		);
 		if (!result.ok) {
 			if (warned.add(change.id)) {
@@ -206,7 +316,8 @@ public final class BanMirrorPoller {
 		}
 		plugin.getLogger().info(
 			"[ban-mirror] " + eventType + " for " + name
-				+ (result.mirrored ? " sent to Discord" : " (no Discord link)")
+				+ (result.duplicate ? " already sent from another server"
+					: result.mirrored ? " sent to Discord" : " (no Discord link)")
 		);
 	}
 
@@ -242,8 +353,8 @@ public final class BanMirrorPoller {
 			}
 			state.put(id, new BanRecord(
 				bans.getString(key + ".name"),
-				bans.getLong(key + ".created"),
-				bans.getLong(key + ".expires"),
+				seconds(bans.getLong(key + ".created")),
+				seconds(bans.getLong(key + ".expires")),
 				null,
 				null
 			));
@@ -269,6 +380,14 @@ public final class BanMirrorPoller {
 
 	private static long millis(Date date) {
 		return date == null ? 0L : date.getTime();
+	}
+
+	/**
+	 * Whole seconds. banned-players.json keeps ban times to the second, so a ban
+	 * read back after a restart loses the milliseconds it had when it was made.
+	 */
+	static long seconds(long millis) {
+		return millis / 1000L * 1000L;
 	}
 
 	/** Full ban length, not time left: a 7 day ban seen a minute late is still "7 days". */

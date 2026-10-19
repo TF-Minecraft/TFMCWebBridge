@@ -75,6 +75,8 @@ public final class Cache {
 	/** Mirror this server's ban list (bans, unbans, expiries) to the Discord bot. */
 	public static boolean banMirrorEnabled = true;
 	public static int banMirrorPollSeconds = 30;
+	/** Apply bans and unbans made on the other servers that share this API. */
+	public static boolean banMirrorSync = false;
 
 	/** Publish LuckPerms snapshots to this server's site. {@link #luckPermsBridgeApply} implies it. */
 	public static boolean luckPermsBridgePublish = false;

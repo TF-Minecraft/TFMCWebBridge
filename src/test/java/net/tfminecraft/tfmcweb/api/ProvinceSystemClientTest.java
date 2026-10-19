@@ -70,7 +70,7 @@ class ProvinceSystemClientTest {
         assertFalse(ProvinceSystemClient.resetCosmeticMintCooldowns(null, null).ok);
         assertFalse(ProvinceSystemClient.postWarning(null, "reason", null, null, null, null).ok);
         assertFalse(ProvinceSystemClient.postWarning("id", null, null, null, null, null).ok);
-        assertFalse(ProvinceSystemClient.postBanEvent(null, null, null, null, null, null, null).ok);
+        assertFalse(ProvinceSystemClient.postBanEvent(null, null, null, null, null, null, null, 0L, 0L).ok);
         assertTrue(ProvinceSystemClient.postBirdMail(null, null, null, null, null).ok);
         assertFalse(ProvinceSystemClient.postBirdMail("id", "discord", null, null, null).ok);
         http.reply(204, ""); assertTrue(ProvinceSystemClient.unlinkDiscord(" id ").ok);
@@ -80,8 +80,15 @@ class ProvinceSystemClientTest {
         http.reply(200, "{\"mirrored\":true}");
         assertTrue(ProvinceSystemClient.postWarning("id", " reason ", "staff", "Ada", "disc", "mc").mirrored);
         assertEquals("reason", JsonParser.parseString(http.request().body()).getAsJsonObject().get("reason").getAsString());
-        http.reply(200, "{}"); assertFalse(ProvinceSystemClient.postBanEvent(" BAN ", null, " ", "mc", "why", "1d", "staff").mirrored);
-        assertEquals("/skins/moderation/ban-events", http.request().path());
+        http.reply(200, "{}"); assertFalse(ProvinceSystemClient.postBanEvent(" BAN ", null, " ", "mc", "why", "1d", "staff", 0L, 0L).mirrored);
+        var banRequest = http.request();
+        assertEquals("/skins/moderation/ban-events", banRequest.path());
+        assertFalse(banRequest.body().contains("banned_at_ms"));
+        http.reply(200, "{}"); ProvinceSystemClient.postBanEvent("ban", "id", null, null, null, null, null, 1000L, -5L);
+        var timed = JsonParser.parseString(http.request().body()).getAsJsonObject();
+        http.reply(200, "{\"mirrored\":false,\"duplicate\":true}");
+        assertTrue(ProvinceSystemClient.postBanEvent("unban", "id", null, null, null, null, null, 0L, 0L).duplicate); http.request();
+        assertEquals(1000L, timed.get("banned_at_ms").getAsLong()); assertEquals(0L, timed.get("expires_at_ms").getAsLong());
         http.reply(200, "{\"mirrored\":true}");
         assertTrue(ProvinceSystemClient.postBirdMail(" id ", "disc", " Char ", "sender", "letter").ok);
         assertEquals("/skins/moderation/bird-mail", http.request().path());
@@ -106,6 +113,21 @@ class ProvinceSystemClientTest {
         http.reply(200, "{}"); assertTrue(ProvinceSystemClient.ping().ok); http.request();
         http.reply(503, ""); assertEquals("HTTP 503", ProvinceSystemClient.ping().error); http.request();
     }
+    @Test void banSyncParsesBansAndUnbans() throws Exception {
+        UUID ada = UUID.randomUUID(), bob = UUID.randomUUID();
+        http.reply(200, "{\"bans\":[{\"player_uuid\":\"bad\"},{},{\"player_uuid\":\"" + ada + "\",\"minecraft_name\":\"Ada\","
+            + "\"reason\":null,\"staff_name\":\"Mod\",\"banned_at_ms\":5,\"expires_at_ms\":0}],"
+            + "\"unbans\":[{\"player_uuid\":\"" + bob + "\",\"unbanned_at_ms\":7}]}");
+        var sync = ProvinceSystemClient.getBanSync();
+        assertEquals("/skins/moderation/bans", http.request().path());
+        assertTrue(sync.ok); assertEquals(1, sync.bans.size());
+        var ban = sync.bans.getFirst();
+        assertEquals(ada, ban.id); assertEquals("Ada", ban.name); assertNull(ban.reason); assertEquals("Mod", ban.staffName);
+        assertEquals(5L, ban.bannedAt); assertEquals(0L, ban.expiresAt);
+        assertEquals(Map.of(bob, 7L), sync.unbans);
+        assertTrue(ProvinceSystemClient.BanSync.fromJson("{}").bans.isEmpty());
+        assertTrue(ProvinceSystemClient.BanSync.fromJson("[]").error.startsWith("Bad ban list"));
+    }
     @Test void allTransportFamiliesReportHttpFailuresConfigurationAndExceptions() throws Exception {
         List<java.util.function.Supplier<String>> operations = List.of(
             () -> ProvinceSystemClient.startDiscordLink("id", "mc").error,
@@ -113,6 +135,7 @@ class ProvinceSystemClientTest {
             () -> ProvinceSystemClient.getCosmeticMintStatus("id").error,
             () -> ProvinceSystemClient.getIdentityStatus("id").error,
             () -> ProvinceSystemClient.listPluginNotices().error,
+            () -> ProvinceSystemClient.getBanSync().error,
             () -> ProvinceSystemClient.unlinkDiscord("id").error,
             () -> ProvinceSystemClient.postWarning("id", "reason", null, null, null, null).error);
         String base = Cache.apiBaseUrl;
