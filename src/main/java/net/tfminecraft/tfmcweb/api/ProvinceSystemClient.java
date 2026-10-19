@@ -10,10 +10,15 @@ import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
+import java.util.UUID;
 import com.google.gson.Gson;
+import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
+import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 
 import net.tfminecraft.tfmcweb.Cache;
@@ -120,20 +125,129 @@ public final class ProvinceSystemClient {
 	public static final class MirrorResult {
 		public final boolean ok;
 		public final boolean mirrored;
+		/** The API already had this ban or unban from another server. */
+		public final boolean duplicate;
 		public final String error;
 
-		private MirrorResult(boolean ok, boolean mirrored, String error) {
+		private MirrorResult(boolean ok, boolean mirrored, boolean duplicate, String error) {
 			this.ok = ok;
 			this.mirrored = mirrored;
+			this.duplicate = duplicate;
 			this.error = error;
 		}
 
 		public static MirrorResult success(boolean mirrored) {
-			return new MirrorResult(true, mirrored, null);
+			return new MirrorResult(true, mirrored, false, null);
+		}
+
+		public static MirrorResult duplicate() {
+			return new MirrorResult(true, false, true, null);
 		}
 
 		public static MirrorResult fail(String error) {
-			return new MirrorResult(false, false, error);
+			return new MirrorResult(false, false, false, error);
+		}
+	}
+
+	/** One active ban from GET /skins/moderation/bans; expiresAt is 0 for permanent. */
+	public static final class SyncedBan {
+		public final UUID id;
+		public final String name;
+		public final String reason;
+		public final String staffName;
+		public final long bannedAt;
+		public final long expiresAt;
+
+		public SyncedBan(UUID id, String name, String reason, String staffName, long bannedAt, long expiresAt) {
+			this.id = id;
+			this.name = name;
+			this.reason = reason;
+			this.staffName = staffName;
+			this.bannedAt = bannedAt;
+			this.expiresAt = expiresAt;
+		}
+	}
+
+	/** Active bans and recent unbans (player → unban time) recorded from every server. */
+	public static final class BanSync {
+		public final boolean ok;
+		public final List<SyncedBan> bans;
+		public final Map<UUID, Long> unbans;
+		public final String error;
+
+		private BanSync(boolean ok, List<SyncedBan> bans, Map<UUID, Long> unbans, String error) {
+			this.ok = ok;
+			this.bans = bans;
+			this.unbans = unbans;
+			this.error = error;
+		}
+
+		public static BanSync success(List<SyncedBan> bans, Map<UUID, Long> unbans) {
+			return new BanSync(true, bans, unbans, null);
+		}
+
+		public static BanSync fail(String error) {
+			return new BanSync(false, Collections.emptyList(), Collections.emptyMap(), error);
+		}
+
+		static BanSync fromJson(String json) {
+			List<SyncedBan> bans = new ArrayList<>();
+			Map<UUID, Long> unbans = new HashMap<>();
+			try {
+				JsonObject root = JsonParser.parseString(json).getAsJsonObject();
+				for (JsonElement el : arrayOrEmpty(root, "bans")) {
+					JsonObject ban = el.getAsJsonObject();
+					UUID id = uuidOrNull(ban, "player_uuid");
+					if (id == null) {
+						continue;
+					}
+					bans.add(new SyncedBan(
+						id,
+						stringOrNull(ban, "minecraft_name"),
+						stringOrNull(ban, "reason"),
+						stringOrNull(ban, "staff_name"),
+						longOrZero(ban, "banned_at_ms"),
+						longOrZero(ban, "expires_at_ms")
+					));
+				}
+				for (JsonElement el : arrayOrEmpty(root, "unbans")) {
+					JsonObject unban = el.getAsJsonObject();
+					UUID id = uuidOrNull(unban, "player_uuid");
+					if (id != null) {
+						unbans.put(id, longOrZero(unban, "unbanned_at_ms"));
+					}
+				}
+			} catch (RuntimeException e) {
+				return fail("Bad ban list from API: " + e.getMessage());
+			}
+			return success(bans, unbans);
+		}
+
+		private static JsonArray arrayOrEmpty(JsonObject obj, String key) {
+			JsonElement el = obj.get(key);
+			return el != null && el.isJsonArray() ? el.getAsJsonArray() : new JsonArray();
+		}
+
+		private static String stringOrNull(JsonObject obj, String key) {
+			JsonElement el = obj.get(key);
+			return el == null || el.isJsonNull() ? null : el.getAsString();
+		}
+
+		private static long longOrZero(JsonObject obj, String key) {
+			JsonElement el = obj.get(key);
+			return el == null || el.isJsonNull() ? 0L : el.getAsLong();
+		}
+
+		private static UUID uuidOrNull(JsonObject obj, String key) {
+			String raw = stringOrNull(obj, key);
+			if (raw == null) {
+				return null;
+			}
+			try {
+				return UUID.fromString(raw.trim());
+			} catch (IllegalArgumentException e) {
+				return null;
+			}
 		}
 	}
 
@@ -412,7 +526,9 @@ public final class ProvinceSystemClient {
 		String minecraftName,
 		String reason,
 		String duration,
-		String staffName
+		String staffName,
+		long bannedAtMs,
+		long expiresAtMs
 	) {
 		String etype = event == null ? "" : event.trim().toLowerCase(Locale.ROOT);
 		if (!"ban".equals(etype) && !"unban".equals(etype)) {
@@ -426,8 +542,51 @@ public final class ProvinceSystemClient {
 		appendOptionalJson(sb, "reason", reason);
 		appendOptionalJson(sb, "duration", duration);
 		appendOptionalJson(sb, "staff_name", staffName);
+		if (bannedAtMs > 0L) {
+			sb.append(",\"banned_at_ms\":").append(bannedAtMs);
+			sb.append(",\"expires_at_ms\":").append(Math.max(0L, expiresAtMs));
+		}
 		sb.append('}');
 		return postMirror("/skins/moderation/ban-events", sb.toString());
+	}
+
+	/** Bans and unbans recorded from every server, for {@code ban-mirror.sync}. */
+	public static BanSync getBanSync() {
+		String base = Cache.apiBaseUrl;
+		String key = Cache.pluginKey;
+		if (base == null || base.isEmpty() || key == null || key.isEmpty()) {
+			return BanSync.fail(notConfiguredMessage());
+		}
+
+		HttpURLConnection connection = null;
+		try {
+			@SuppressWarnings("deprecation")
+			URL url = new URL(base + "/skins/moderation/bans");
+			connection = (HttpURLConnection) url.openConnection();
+			connection.setRequestMethod("GET");
+			connection.setConnectTimeout(TIMEOUT_MS);
+			connection.setReadTimeout(TIMEOUT_MS);
+			connection.setRequestProperty("X-Plugin-Key", key);
+			connection.setRequestProperty("Accept", "application/json");
+
+			int status = connection.getResponseCode();
+			String response = readBody(
+				status >= 200 && status < 300
+					? connection.getInputStream()
+					: connection.getErrorStream()
+			);
+
+			if (status == 200) {
+				return BanSync.fromJson(response);
+			}
+			return BanSync.fail(detailOrHttp(response, status));
+		} catch (Exception e) {
+			return BanSync.fail("Could not reach API: " + e.getMessage());
+		} finally {
+			if (connection != null) {
+				connection.disconnect();
+			}
+		}
 	}
 
 	public static MirrorResult postBirdMail(
@@ -499,6 +658,9 @@ public final class ProvinceSystemClient {
 					: connection.getErrorStream()
 			);
 			if (status == 200) {
+				if ("true".equalsIgnoreCase(jsonString(response, "duplicate"))) {
+					return MirrorResult.duplicate();
+				}
 				boolean mirrored = "true".equalsIgnoreCase(jsonString(response, "mirrored"));
 				return MirrorResult.success(mirrored);
 			}

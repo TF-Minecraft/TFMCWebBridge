@@ -44,6 +44,7 @@ public final class ConfigLoader {
 			config.getInt("ban-mirror.poll-seconds", 30),
 			30
 		);
+		Cache.banMirrorSync = config.getBoolean("ban-mirror.sync", false);
 		loadLuckPermsBridge(config);
 	}
 

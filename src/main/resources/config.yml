@@ -158,10 +158,15 @@ patreon:
 
 # Mirror this server's ban list to Discord (DM + Banned role on ban, role
 # cleared on unban or when a timed ban expires). Linked players only. The list
-# is checked every poll-seconds; changes apply on restart.
+# is checked every poll-seconds; changes apply on restart. The same ban
+# reported by several servers sends one Discord message.
+# sync: also apply bans and unbans made on the other servers that use this
+# API, so one /ban covers them all. Set true on each server that should share
+# bans (TFMCMain and TFMCLobby).
 ban-mirror:
   enabled: true
   poll-seconds: 30
+  sync: false
 
 # Staff-panel LuckPerms bridge. LuckPerms storage is shared across servers, so
 # set apply true on exactly one server. publish only sends data to this server's site.
