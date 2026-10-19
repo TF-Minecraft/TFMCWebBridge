@@ -241,6 +241,11 @@ class BanMirrorPollerTest {
         verifyNoPosts();
         verify(banList, times(1)).addBan(any(PlayerProfile.class), nullable(String.class), nullable(Date.class), nullable(String.class));
 
+        // A player listed as both banned and unbanned keeps the ban.
+        syncReturns(BanSync.success(List.of(new SyncedBan(ADA, "Ada", "traps", "Mod", now, now + 24 * HOUR)), Map.of(ADA, now + 1_000)));
+        tick.run();
+        verify(banList, never()).pardon(any(PlayerProfile.class));
+
         // Unbanned elsewhere: lifted here, still without a post from this server.
         syncReturns(BanSync.success(List.of(), Map.of(ADA, now + 1_000, BOB, now - 60_000)));
         tick.run();

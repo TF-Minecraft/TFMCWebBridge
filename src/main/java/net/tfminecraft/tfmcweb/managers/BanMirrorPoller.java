@@ -165,7 +165,9 @@ public final class BanMirrorPoller {
 			ProfileBanList list = Bukkit.getBanList(BanListType.PROFILE);
 			Map<UUID, BanRecord> current = readBanList(now);
 			Set<UUID> banned = new HashSet<>();
+			Set<UUID> remoteBanned = new HashSet<>();
 			for (SyncedBan ban : remote.bans) {
+				remoteBanned.add(ban.id);
 				if (shouldApply(ban, known.get(ban.id), current.get(ban.id), now)) {
 					applyBan(list, ban);
 					banned.add(ban.id);
@@ -173,6 +175,9 @@ public final class BanMirrorPoller {
 			}
 			for (Map.Entry<UUID, Long> unban : remote.unbans.entrySet()) {
 				UUID id = unban.getKey();
+				if (remoteBanned.contains(id)) {
+					continue;
+				}
 				BanRecord local = current.get(id);
 				BanRecord was = known.get(id);
 				// Only lift a ban this server already mirrored and that is older than the unban.
