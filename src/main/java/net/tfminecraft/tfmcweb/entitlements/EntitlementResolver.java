@@ -21,6 +21,8 @@ public final class EntitlementResolver {
 	public static final String KEY_WARDROBE_SLOTS = "wardrobe-skin-slots";
 	public static final String KEY_MAX_3D_PAIR = "max-3d-pair-bytes";
 	public static final String KEY_SKIN_COOLDOWN = "skin-token-cooldown-days";
+	/** Most swappable wardrobe skins per character; the website and RPCharacters use the same cap. */
+	public static final int MAX_WARDROBE_SKIN_SLOTS = 5;
 
 	private EntitlementResolver() {}
 
@@ -71,7 +73,7 @@ public final class EntitlementResolver {
 		int maxAlive = maxInt(player, Cache.rpcMetaGroups, Cache.rpcMetaDefaults, KEY_MAX_ALIVE);
 		int wardrobeSlots = Math.max(
 			1,
-			Math.min(3, maxInt(player, Cache.rpcMetaGroups, Cache.rpcMetaDefaults, KEY_WARDROBE_SLOTS))
+			Math.min(MAX_WARDROBE_SKIN_SLOTS, maxInt(player, Cache.rpcMetaGroups, Cache.rpcMetaDefaults, KEY_WARDROBE_SLOTS))
 		);
 
 		int pairBytes = maxInt(player, Cache.skinsMetaGroups, Cache.skinsMetaDefaults, KEY_MAX_3D_PAIR);

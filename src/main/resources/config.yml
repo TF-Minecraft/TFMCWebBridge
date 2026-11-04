@@ -44,6 +44,7 @@ token-cooldowns:
 #   armourshop/src/main/resources/permission-groups.yml
 #   drinkbuilder/src/main/resources/permission-groups.yml
 # TFMCWeb only posts values; plugins still own in-game unlock semantics.
+# wardrobe-skin-slots is 1 to 5 swappable skins per character (base + Skin 2 … Skin 5).
 # Optional per-realm overrides (falls back to top-level rpc/skins/drinks):
 #   player-meta.by-realm.dev.rpc: { defaults: ..., groups: [...] }
 player-meta:
@@ -72,22 +73,27 @@ player-meta:
         tier: 1
         name-colour-stops: 1
         max-alive-characters: 3
-        wardrobe-skin-slots: 1
+        wardrobe-skin-slots: 2
       - permission: rpchar.group.gilded
         tier: 2
         name-colour-stops: 2
         max-alive-characters: 4
-        wardrobe-skin-slots: 2
+        wardrobe-skin-slots: 3
       - permission: rpchar.group.ascended
         tier: 3
         name-colour-stops: 20
         max-alive-characters: 5
-        wardrobe-skin-slots: 3
+        wardrobe-skin-slots: 5
       - permission: rpchar.group.legacy
         tier: 4
         name-colour-stops: 20
         max-alive-characters: 5
-        wardrobe-skin-slots: 3
+        wardrobe-skin-slots: 5
+      # Staff and helpers (RPCharacters' hidden staff group), on and off duty.
+      - permission: rpchar.group.staff
+        tier: 100
+        max-alive-characters: 8
+        wardrobe-skin-slots: 5
 
   skins:
     defaults:

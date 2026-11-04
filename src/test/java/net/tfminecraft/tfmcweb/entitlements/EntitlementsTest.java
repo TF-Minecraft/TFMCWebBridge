@@ -52,7 +52,7 @@ class EntitlementsTest {
         Cache.drinksMetaGroups=Arrays.asList(null,blank,low,high,higher);
         Cache.playerMetaSyncPermissions=Arrays.asList(null," "," allowed ","denied");
         var meta=EntitlementResolver.resolve(player);
-        assertEquals(4,meta.nameColourStops);assertEquals(8,meta.maxAliveCharacters);assertEquals(3,meta.wardrobeSkinSlots);assertEquals(60000,meta.max3dPairBytes);
+        assertEquals(4,meta.nameColourStops);assertEquals(8,meta.maxAliveCharacters);assertEquals(EntitlementResolver.MAX_WARDROBE_SKIN_SLOTS,meta.wardrobeSkinSlots);assertEquals(5,meta.wardrobeSkinSlots);assertEquals(60000,meta.max3dPairBytes);
         assertEquals(5,meta.skinTokenCooldownDays);assertEquals(List.of("item","book","armor"),meta.skinKinds);assertTrue(meta.allowArmor3dHelmet && meta.allowDrinkTexture && meta.allowDrinkMessage);
         assertEquals(Map.of("allowed",true,"denied",false),meta.permissionFlags);
         Cache.skinsMetaGroups=List.of(high); assertEquals(-1,EntitlementResolver.resolve(player).skinTokenCooldownDays); assertFalse(EntitlementResolver.resolve(player).allowArmor3dHelmet);
