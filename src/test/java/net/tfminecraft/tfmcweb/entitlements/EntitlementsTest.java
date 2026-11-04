@@ -52,11 +52,21 @@ class EntitlementsTest {
         Cache.drinksMetaGroups=Arrays.asList(null,blank,low,high,higher);
         Cache.playerMetaSyncPermissions=Arrays.asList(null," "," allowed ","denied");
         var meta=EntitlementResolver.resolve(player);
-        assertEquals(4,meta.nameColourStops);assertEquals(8,meta.maxAliveCharacters);assertEquals(3,meta.wardrobeSkinSlots);assertEquals(60000,meta.max3dPairBytes);
+        assertEquals(4,meta.nameColourStops);assertEquals(8,meta.maxAliveCharacters);assertEquals(EntitlementResolver.MAX_WARDROBE_SKIN_SLOTS,meta.wardrobeSkinSlots);assertEquals(5,meta.wardrobeSkinSlots);assertEquals(60000,meta.max3dPairBytes);
         assertEquals(5,meta.skinTokenCooldownDays);assertEquals(List.of("item","book","armor"),meta.skinKinds);assertTrue(meta.allowArmor3dHelmet && meta.allowDrinkTexture && meta.allowDrinkMessage);
         assertEquals(Map.of("allowed",true,"denied",false),meta.permissionFlags);
         Cache.skinsMetaGroups=List.of(high); assertEquals(-1,EntitlementResolver.resolve(player).skinTokenCooldownDays); assertFalse(EntitlementResolver.resolve(player).allowArmor3dHelmet);
         Cache.drinksMetaGroups=List.of(low);when(player.hasPermission("rank.low")).thenReturn(true);assertFalse(EntitlementResolver.resolve(player).allowDrinkTexture);assertFalse(EntitlementResolver.resolve(player).allowDrinkMessage);
+    }
+    @Test void wardrobeSlotsUpToTheCapResolveAsConfigured() {
+        Cache.rpcMetaDefaults=Map.of(); Cache.skinsMetaDefaults=Map.of(); Cache.drinksMetaDefaults=Map.of();
+        Cache.skinsMetaGroups=List.of(); Cache.drinksMetaGroups=List.of(); Cache.playerMetaSyncPermissions=List.of();
+        Cache.rpcMetaGroups=List.of(group("rank.four",2,Map.of("wardrobe-skin-slots",4),null,null,null,null),
+                group("rank.five",3,Map.of("wardrobe-skin-slots",5),null,null,null,null));
+        Player four=mock(Player.class); when(four.hasPermission("rank.four")).thenReturn(true);
+        Player five=mock(Player.class); when(five.hasPermission("rank.five")).thenReturn(true);
+        assertEquals(4,EntitlementResolver.resolve(four).wardrobeSkinSlots);
+        assertEquals(5,EntitlementResolver.resolve(five).wardrobeSkinSlots);
     }
     @Test void syncJsonCopiesValuesAndSkipsBlankKeys() {
         UUID id=UUID.randomUUID(); Cache.realmId="dev";
