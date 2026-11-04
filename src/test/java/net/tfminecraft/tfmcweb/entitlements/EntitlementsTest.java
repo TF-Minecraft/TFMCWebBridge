@@ -58,6 +58,16 @@ class EntitlementsTest {
         Cache.skinsMetaGroups=List.of(high); assertEquals(-1,EntitlementResolver.resolve(player).skinTokenCooldownDays); assertFalse(EntitlementResolver.resolve(player).allowArmor3dHelmet);
         Cache.drinksMetaGroups=List.of(low);when(player.hasPermission("rank.low")).thenReturn(true);assertFalse(EntitlementResolver.resolve(player).allowDrinkTexture);assertFalse(EntitlementResolver.resolve(player).allowDrinkMessage);
     }
+    @Test void wardrobeSlotsUpToTheCapResolveAsConfigured() {
+        Cache.rpcMetaDefaults=Map.of(); Cache.skinsMetaDefaults=Map.of(); Cache.drinksMetaDefaults=Map.of();
+        Cache.skinsMetaGroups=List.of(); Cache.drinksMetaGroups=List.of(); Cache.playerMetaSyncPermissions=List.of();
+        Cache.rpcMetaGroups=List.of(group("rank.four",2,Map.of("wardrobe-skin-slots",4),null,null,null,null),
+                group("rank.five",3,Map.of("wardrobe-skin-slots",5),null,null,null,null));
+        Player four=mock(Player.class); when(four.hasPermission("rank.four")).thenReturn(true);
+        Player five=mock(Player.class); when(five.hasPermission("rank.five")).thenReturn(true);
+        assertEquals(4,EntitlementResolver.resolve(four).wardrobeSkinSlots);
+        assertEquals(5,EntitlementResolver.resolve(five).wardrobeSkinSlots);
+    }
     @Test void syncJsonCopiesValuesAndSkipsBlankKeys() {
         UUID id=UUID.randomUUID(); Cache.realmId="dev";
         var meta=new EntitlementResolver.ResolvedMeta(3,true,false,8,2,40000,5,List.of(" BOOK "," ","item"),true,Map.of("p\"\\",true,"q",false," ",true));
